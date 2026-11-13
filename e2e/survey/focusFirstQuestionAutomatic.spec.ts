@@ -1,0 +1,145 @@
+import { frameworks, url, initSurvey, getSurveyResult, setRowItemFlowDirection, visibleInViewportForShadowDom, test, expect, getButtonByText } from "../helper";
+
+const title = "autoFocusFirstQuestion";
+
+const json = {
+  autoFocusFirstQuestion: true,
+  pages: [
+    { elements: [{ type: "text", name: "q1" }] },
+    { elements: [{ type: "text", name: "q2" }] }
+  ]
+};
+
+frameworks.forEach((framework) => {
+  test.describe(`${framework} ${title}`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.goto(`${url}${framework}`);
+      await page.evaluate(() => {
+        const el = document.createElement("input");
+        el.type = "text";
+        document.body.appendChild(el);
+        el.focus();
+      });
+    });
+
+    test("Check first focused question, focus question", async ({ page }) => {
+      await initSurvey(page, framework, json);
+      // autoFocusFirstQuestion focuses the first input after the page renders.
+      await expect(page.locator("div[data-name=q1] input")).toBeFocused();
+      await page.keyboard.type("val1");
+      await getButtonByText(page, "Next").click();
+      await page.keyboard.type("val2");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({ q1: "val1", q2: "val2" });
+    });
+
+    test("Check first focused question, avoid focusing question in code", async ({ page }) => {
+      await initSurvey(page, framework, json, false, { autoFocusFirstQuestion: false });
+      await expect(page.locator("div[data-name=q1] input")).toBeVisible();
+      await expect(page.locator("div[data-name=q1] input")).not.toBeFocused();
+      await page.keyboard.type("val1");
+      await getButtonByText(page, "Next").click();
+      await page.keyboard.type("val2");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({});
+    });
+
+    test("Check first focused question, avoid focusing question in json", async ({ page }) => {
+      json["autoFocusFirstQuestion"] = false;
+      await initSurvey(page, framework, json);
+      json["autoFocusFirstQuestion"] = true;
+      await expect(page.locator("div[data-name=q1] input")).toBeVisible();
+      await expect(page.locator("div[data-name=q1] input")).not.toBeFocused();
+      await page.keyboard.type("val1");
+      await getButtonByText(page, "Next").click();
+      await page.keyboard.type("val2");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({});
+    });
+
+    test("Focus and scroll into view question", async ({ page }) => {
+      await setRowItemFlowDirection(page);
+
+      const focusQuestion = async (name: string, doScroll: boolean) => {
+        await page.evaluate(([name, doScroll]) => {
+          const q = window["survey"].getQuestionByName(name);
+          q.focus(false, doScroll);
+        }, [name, doScroll]);
+      };
+
+      await initSurvey(page, framework, {
+        elements: [
+          { type: "text", name: "q1" },
+          { type: "radiogroup", name: "q2", choices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+          { type: "radiogroup", name: "q3", choices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+          { type: "panel", name: "panel1",
+            elements: [
+              { type: "text", name: "panel1_q1" },
+              { type: "radiogroup", name: "panel1_q2", choices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+              { type: "radiogroup", name: "panel1_q3", choices: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }
+            ]
+          }
+        ]
+      });
+
+      const q1Sel = page.locator("div[data-name=q1] input");
+      const panel1_q1Sel = page.locator("div[data-name=panel1_q1] input");
+
+      // question.focus() scrolls first and focuses the input in a callback.
+      await focusQuestion("panel1_q1", false);
+      await expect(panel1_q1Sel).toBeFocused();
+      await expect.poll(() => visibleInViewportForShadowDom(page, "input[type=text]", 1)).toBeTruthy();
+      await page.keyboard.type("a");
+
+      await focusQuestion("q1", false);
+      await expect(q1Sel).toBeFocused();
+      await expect.poll(() => visibleInViewportForShadowDom(page, "input[type=text]", 0)).toBeTruthy();
+      await page.keyboard.type("b");
+
+      let elementVisisbleInViewPort: boolean;
+
+      await focusQuestion("panel1_q1", true);
+      elementVisisbleInViewPort = await visibleInViewportForShadowDom(page, "input[type=text]", 1);
+      await expect(elementVisisbleInViewPort).toBeTruthy();
+
+      elementVisisbleInViewPort = await visibleInViewportForShadowDom(page, "input[type=text]", 0);
+      await expect(elementVisisbleInViewPort).toBeFalsy();
+
+      await getButtonByText(page, "Complete").click();
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({ q1: "b", panel1_q1: "a" });
+    });
+
+    [
+      { type: "radiogroup", selector: ".sd-radio input", extra: { choices: ["a", "b"] } },
+      { type: "checkbox", selector: ".sd-checkbox input", extra: { choices: ["a", "b"] } },
+      { type: "boolean", selector: ".sd-boolean input" },
+      {
+        type: "imagepicker",
+        selector: ".sd-imagepicker__item input",
+        extra: {
+          choices: [
+            { value: "lion", imageLink: "https://surveyjs.io/Content/Images/examples/image-picker/lion.jpg" },
+            { value: "giraffe", imageLink: "https://surveyjs.io/Content/Images/examples/image-picker/giraffe.jpg" }
+          ]
+        }
+      }
+    ].forEach((testCase) => {
+      test(`Show focus indicator for ${testCase.type}`, async ({ page }) => {
+        await initSurvey(page, framework, {
+          autoFocusFirstQuestion: true,
+          elements: [{ type: testCase.type, name: "q1", ...testCase.extra }]
+        });
+        const input = page.locator(testCase.selector).first();
+        await expect(input).toBeFocused();
+        await expect.poll(async () => input.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
+      });
+    });
+  });
+});

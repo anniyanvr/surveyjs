@@ -1,0 +1,201 @@
+import { describe, test, expect } from "vitest";
+import { lintSurvey, ILintFinding } from "../../src/linter/index";
+
+function byRule(json: any, ruleId: string, options?: any): Array<ILintFinding> {
+  return lintSurvey(json, options).findings.filter(f => f.ruleId === ruleId);
+}
+
+describe("reference/self", () => {
+  test("visibleIf referencing own name is flagged with reproduction", () => {
+    const findings = byRule({
+      elements: [{ type: "text", name: "q1", visibleIf: "{q1} notempty" }],
+    }, "reference/self");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].reproduction).toBeDefined();
+    expect(findings[0].reproduction.steps[0]).toEqual({ set: { q1: "<any value>" } });
+  });
+  test("enableIf via valueName is flagged", () => {
+    expect(byRule({
+      elements: [{ type: "text", name: "q1", valueName: "income", enableIf: "{income} > 0" }],
+    }, "reference/self")).toHaveLength(1);
+  });
+  test("{self} in a question condition is flagged", () => {
+    expect(byRule({
+      elements: [{ type: "text", name: "q1", requiredIf: "{self} notempty" }],
+    }, "reference/self")).toHaveLength(1);
+  });
+  test("{self} in choicesVisibleIf is NOT flagged (binds to the item)", () => {
+    expect(byRule({
+      elements: [{
+        type: "checkbox", name: "q1", choices: ["a"],
+        choicesVisibleIf: "{self} != 'b'",
+      }],
+    }, "reference/self")).toHaveLength(0);
+  });
+  test("column self-reference via {row.own} is flagged", () => {
+    expect(byRule({
+      elements: [{
+        type: "matrixdynamic", name: "m1",
+        columns: [{ name: "col1", visibleIf: "{row.col1} > 0" }],
+      }],
+    }, "reference/self")).toHaveLength(1);
+  });
+  test("template question self-reference via {panel.own} is flagged", () => {
+    expect(byRule({
+      elements: [{
+        type: "paneldynamic", name: "p1",
+        templateElements: [{ type: "text", name: "inner", visibleIf: "{panel.inner} = 1" }],
+      }],
+    }, "reference/self")).toHaveLength(1);
+  });
+  test("defaultValueExpression referencing self is NOT flagged (conditions only)", () => {
+    expect(byRule({
+      elements: [{ type: "text", name: "q1", defaultValueExpression: "{q1}" }],
+    }, "reference/self")).toHaveLength(0);
+  });
+});
+
+describe("name/duplicate", () => {
+  test("two questions on different pages share a name", () => {
+    const findings = byRule({
+      pages: [
+        { name: "p1", elements: [{ type: "text", name: "q1" }] },
+        { name: "p2", elements: [{ type: "text", name: "q1" }] },
+      ],
+    }, "name/duplicate");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].path).toBe("pages[1].elements[0]");
+    expect(findings[0].related).toHaveLength(2);
+  });
+  test("the message states the name is duplicated, without a count or a kind list", () => {
+    const findings = byRule({
+      elements: [
+        { type: "text", name: "q1" },
+        { type: "text", name: "q1" },
+        { type: "text", name: "q1" },
+      ],
+    }, "name/duplicate");
+    expect(findings).toHaveLength(2);
+    expect(findings[0].message).toBe("The name \"q1\" is duplicated.");
+    expect(findings[0].messageData.count).toBeUndefined();
+    expect(findings[0].messageData.kinds).toBeUndefined();
+  });
+  test("the message of a duplicate inside a namespace names the scope", () => {
+    const findings = byRule({
+      elements: [{
+        type: "matrixdynamic", name: "m1",
+        columns: [{ name: "col1" }, { name: "col1" }],
+      }],
+    }, "name/duplicate");
+    expect(findings[0].message).toBe("The name \"col1\" is duplicated inside matrix \"m1\".");
+    expect(findings[0].messageData.scope).toBe("matrix \"m1\"");
+  });
+  test("question vs panel name clash is flagged", () => {
+    expect(byRule({
+      elements: [
+        { type: "panel", name: "info", elements: [] },
+        { type: "text", name: "info" },
+      ],
+    }, "name/duplicate")).toHaveLength(1);
+  });
+  test("calculated value shadowing a question is flagged", () => {
+    const findings = byRule({
+      elements: [{ type: "text", name: "total" }],
+      calculatedValues: [{ name: "total", expression: "1" }],
+    }, "name/duplicate");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].elementType).toBe("calculatedvalue");
+  });
+  test("duplicate calculated value names are flagged", () => {
+    expect(byRule({
+      calculatedValues: [
+        { name: "a", expression: "1" },
+        { name: "a", expression: "2" },
+      ],
+    }, "name/duplicate")).toHaveLength(1);
+  });
+  // which names share a namespace is pinned in linter-name-duplicate-parity.tests.ts, against
+  // the walk the Creator's JSON tab always did; here it is the message that is read
+  test("the message of a duplicate item names the multiple text as its scope", () => {
+    const findings = byRule({
+      elements: [{
+        type: "multipletext", name: "q1",
+        items: [{ name: "item1" }, { name: "item1" }],
+      }],
+    }, "name/duplicate");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].path).toBe("elements[0].items[1]");
+    expect(findings[0].messageData.scope).toBe("multiple text \"q1\"");
+  });
+  test("duplicate valueNames are NOT flagged (legal feature)", () => {
+    expect(byRule({
+      elements: [
+        { type: "text", name: "q1", valueName: "shared" },
+        { type: "text", name: "q2", valueName: "shared" },
+      ],
+    }, "name/duplicate")).toHaveLength(0);
+  });
+});
+
+describe("element/unknown-type", () => {
+  test("typo in type produces an info finding with suggestion", () => {
+    const findings = byRule({
+      elements: [{ type: "chekbox", name: "q1" }],
+    }, "element/unknown-type");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].suggestion).toBe("checkbox");
+  });
+  test("a question without a type has its own reason and no suggestion", () => {
+    const findings = byRule({
+      elements: [{ name: "q1" }, { type: "", name: "q2" }],
+    }, "element/unknown-type");
+    expect(findings.map(f => f.path)).toEqual(["elements[0]", "elements[1]"]);
+    findings.forEach(finding => {
+      expect(finding.reason).toBe("missingType");
+      expect(finding.suggestion).toBeUndefined();
+      expect(finding.message).toContain("has no type");
+      expect(finding.message).not.toContain("options.components");
+    });
+    expect(findings[0].messageData).toEqual({ reason: "missingType", name: "q1", type: "" });
+  });
+  test("type passed via options.components is known", () => {
+    expect(byRule({
+      elements: [{ type: "fullname", name: "q1" }],
+    }, "element/unknown-type", { components: { fullname: {} } })).toHaveLength(0);
+  });
+  test("all built-in types are known", () => {
+    expect(byRule({
+      elements: [
+        { type: "text", name: "a" }, { type: "rating", name: "b" },
+        { type: "signaturepad", name: "c" }, { type: "html", name: "d" },
+      ],
+    }, "element/unknown-type")).toHaveLength(0);
+  });
+});
+
+describe("expression/unknown-function", () => {
+  test("typo in a built-in function name is flagged with suggestion", () => {
+    const findings = byRule({
+      elements: [
+        { type: "matrixdynamic", name: "m1", columns: [{ name: "col1" }] },
+        { type: "expression", name: "sum", expression: "sumInArrey({m1}, 'col1')" },
+      ],
+    }, "expression/unknown-function");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("warning");
+    expect(findings[0].suggestion).toBe("sumInArray");
+  });
+  test("built-in functions are known", () => {
+    expect(byRule({
+      elements: [{ type: "expression", name: "e", expression: "iif(age({birthdate}) > 18, 1, 2)" }],
+    }, "expression/unknown-function")).toHaveLength(0);
+  });
+  test("options.knownFunctions silences custom functions", () => {
+    const survey = {
+      elements: [{ type: "expression", name: "e", expression: "myCustomFunc(1)" }],
+    };
+    expect(byRule(survey, "expression/unknown-function")).toHaveLength(1);
+    expect(byRule(survey, "expression/unknown-function", { knownFunctions: ["myCustomFunc"] })).toHaveLength(0);
+  });
+});

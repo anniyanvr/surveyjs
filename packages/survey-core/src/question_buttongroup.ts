@@ -1,0 +1,234 @@
+import { Serializer } from "./jsonobject";
+import { property } from "./decorators";
+import { ItemValue } from "./itemvalue";
+import { ChoiceItem, QuestionCheckboxBase } from "./question_baseselect";
+import { LocalizableString } from "./localizablestring";
+import { toCssClasses } from "./utils/cssClassBuilder";
+import { DropdownListModel } from "./dropdownListModel";
+import { dropdownQuestionMixin } from "./dropdownRenderState";
+import { updateListCssValues } from "./utils/dom-utils";
+
+export class ButtonGroupItemValue extends ChoiceItem {
+  protected getBaseType(): string {
+    return "buttongroupitemvalue";
+  }
+  /*
+    Item icon property
+  */
+  @property() iconName: string;
+  /*
+    By default icon size is 24.
+    Use this property to change item icon size.
+  */
+  @property() iconSize: number;
+  /**
+   * By default item caption is visible.
+   * Set it 'false' to hide item caption.
+   */
+  @property() showCaption: boolean;
+}
+
+export class QuestionButtonGroupModel extends dropdownQuestionMixin(QuestionCheckboxBase) {
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+    const resetReadOnlyTextProps = ["value", "renderAs", "placeholder", "choices", "visibleChoices"];
+    if (resetReadOnlyTextProps.indexOf(name) > -1) {
+      this.resetReadOnlyText();
+    }
+  }
+  public locStrsChanged(): void {
+    super.locStrsChanged();
+    this.resetReadOnlyText();
+    this.dropdownListModelValue?.locStrsChanged();
+  }
+  public getType(): string {
+    return "buttongroup";
+  }
+  protected getItemValueType() {
+    return "buttongroupitemvalue";
+  }
+  public supportOther(): boolean {
+    return false;
+  }
+
+  public getControlClass(): string {
+    return toCssClasses(
+      !this.isDropdown && this.cssClasses.root,
+      this.isDropdown && this.cssClasses.control,
+      this.isDropdown && this.isEmpty() && this.cssClasses.controlEmpty,
+      this.hasCssError() && this.cssClasses.onError,
+      this.isDisabledStyle && this.cssClasses.controlDisabled,
+      this.isReadOnlyStyle && this.cssClasses.controlReadOnly,
+      this.isPreviewStyle && this.cssClasses.controlPreview
+    );
+  }
+  public getInputId(index: number): string {
+    return this.inputId + "_" + index;
+  }
+  @property({ localizable: { defaultStr: "buttongroupOptionsCaption" } }) placeholder: string;
+  // allowClear stays the dropdown input button. The title does not get a second Clear button.
+  public get supportClearTitleAction(): boolean {
+    return false;
+  }
+  get searchEnabled(): boolean {
+    return false;
+  }
+  get isDropdown(): boolean {
+    return this.renderAs === "dropdown";
+  }
+  public isItemSelected(item: ItemValue): boolean {
+    return item.value == this.value;
+  }
+  public get readOnlyText(): string {
+    return this.locReadOnlyText.calculatedText;
+  }
+  public get locReadOnlyText(): LocalizableString {
+    return this.getOrCreateLocStr("readOnlyText", true, false, (locStr: LocalizableString) => {
+      locStr.onGetTextCallback = (): string => {
+        return this.displayValue || this.placeholder;
+      };
+    });
+  }
+  private resetReadOnlyText(): void {
+    this.resetPropertyValue("readOnlyText");
+  }
+  @property({ defaultValue: false }) inputHasValue: boolean;
+
+  public get showSelectedItemLocText(): boolean {
+    return !this.readOnly && !this.inputHasValue && !!this.selectedItemLocText;
+  }
+  public get selectedItemLocText(): LocalizableString {
+    return this.selectedItem?.locText;
+  }
+
+  protected canCreateDropdownListModel(): boolean {
+    return this.isDropdown;
+  }
+  protected createDropdownListModel(): DropdownListModel {
+    return new DropdownListModel(this);
+  }
+  protected onDropdownListModelAssigned(): void {
+    this.updateElementCss();
+  }
+  public get selectedItem(): ItemValue { return this.getSingleSelectedItem(); }
+
+  protected updateCssClasses(res: any, css: any) {
+    super.updateCssClasses(res, css);
+    updateListCssValues(res, css);
+  }
+
+  // responsiveness
+  public needResponsiveWidth(): boolean {
+    return true;
+  }
+  protected supportResponsiveness(): boolean {
+    return true;
+  }
+  protected getCompactRenderAs(): string {
+    return "dropdown";
+  }
+  protected getObservedElementSelector(): string {
+    return ".sd-button-group-scrollable-container";
+  }
+}
+
+Serializer.addClass(
+  "buttongroup",
+  [
+    { name: "allowClear:boolean", default: true, visible: false },
+    {
+      name: "choices:buttongroupitemvalue[]",
+    },
+  ],
+  function() {
+    return new QuestionButtonGroupModel("");
+  },
+  "checkboxbase"
+);
+
+Serializer.addClass(
+  "buttongroupitemvalue",
+  [
+    { name: "showCaption:boolean", default: true },
+    { name: "iconName:text" },
+    { name: "iconSize:number" },
+  ],
+  (value: any) => new ButtonGroupItemValue(value),
+  "choiceitem"
+);
+
+// QuestionFactory.Instance.registerQuestion("buttongroup", name => {
+//   var q = new QuestionButtonGroupModel(name);
+//   q.choices = QuestionFactory.DefaultChoices;
+//   return q;
+// });
+
+export class ButtonGroupItemModel {
+  constructor(
+    public question: QuestionButtonGroupModel,
+    public item: ItemValue,
+    public index: number
+  ) {}
+  public get value() {
+    return this.item.value;
+  }
+  public get iconName() {
+    return this.item.iconName;
+  }
+  public get iconSize() {
+    return this.item.iconSize || 24;
+  }
+  public get caption(): LocalizableString {
+    return this.item.locText;
+  }
+  public get showCaption() {
+    return this.item.showCaption || this.item.showCaption === undefined;
+  }
+  public get isRequired() {
+    return this.question.isRequired;
+  }
+  public get selected() {
+    return this.question.isItemSelected(this.item);
+  }
+  public get readOnly() {
+    return this.question.isInputReadOnly || !this.item.isEnabled;
+  }
+  public get name() {
+    return this.question.name + "_" + this.question.id;
+  }
+  public get id() {
+    return this.question.inputId + "_" + this.index;
+  }
+  public get hasErrors() {
+    return this.question.errors.length > 0;
+  }
+  public get describedBy() {
+    return this.question.errors.length > 0
+      ? this.question.renderedId + "_errors"
+      : null;
+  }
+  public get tabIndex(): number {
+    return this.selected ? -1 : 0;
+  }
+  private get labelClass() {
+    return toCssClasses(
+      this.question.cssClasses.item,
+      this.selected && this.question.cssClasses.itemSelected,
+      !this.readOnly && !this.selected && this.question.cssClasses.itemHover,
+      !this.item.isEnabled && this.question.cssClasses.itemDisabled,
+      this.question.isReadOnly && this.question.cssClasses.itemReadOnly
+    );
+  }
+  public get css() {
+    return {
+      label: this.labelClass,
+      icon: this.question.cssClasses.itemIcon,
+      control: this.question.cssClasses.itemControl,
+      caption: this.question.cssClasses.itemCaption,
+      decorator: this.question.cssClasses.itemDecorator,
+    };
+  }
+  public onChange() {
+    this.question.selectItem(this.item);
+  }
+}

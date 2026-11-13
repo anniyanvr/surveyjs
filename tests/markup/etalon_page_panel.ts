@@ -1,5 +1,3 @@
-import { settings } from "../../src/settings";
-import { StylesManager } from "../../src/stylesmanager";
 import { registerMarkupTest } from "./helper";
 
 registerMarkupTest(
@@ -10,7 +8,7 @@ registerMarkupTest(
         {
           type: "panel",
           name: "name",
-          showQuestionNumbers: "off",
+          showQuestionNumbers: false,
           elements: [
             {
               type: "html",
@@ -18,6 +16,13 @@ registerMarkupTest(
               html: "HTML content here",
               title: "Question title",
               titleLocation: "hidden"
+            },
+            {
+              "type": "image",
+              "name": "banner",
+              "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/lion.jpg",
+              "imageWidth": "500px",
+              "imageHeight": "300px"
             }
           ]
         }
@@ -36,7 +41,7 @@ registerMarkupTest(
           type: "panel",
           name: "name",
           titleLocation: "hidden",
-          showQuestionNumbers: "off",
+          showQuestionNumbers: false,
           elements: [
             {
               "type": "text",
@@ -53,7 +58,7 @@ registerMarkupTest(
 
 registerMarkupTest(
   {
-    name: "Test Panel - start with new line",
+    name: "Test Panel - panel start with new line",
     json: {
       "elements": [
         {
@@ -66,7 +71,7 @@ registerMarkupTest(
         {
           type: "panel",
           name: "name",
-          showQuestionNumbers: "off",
+          showQuestionNumbers: false,
           startWithNewLine: false,
           elements: [
             {
@@ -80,8 +85,7 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPanel",
     snapshot: "panel-swnl-v2",
   });
@@ -90,6 +94,7 @@ registerMarkupTest(
   {
     name: "Test Page - start with new line with panel",
     json: {
+      gridLayoutEnabled: false,
       "elements": [
         {
           type: "html",
@@ -101,7 +106,7 @@ registerMarkupTest(
         {
           type: "panel",
           name: "name",
-          showQuestionNumbers: "off",
+          showQuestionNumbers: false,
           startWithNewLine: false,
           elements: [
             {
@@ -115,8 +120,7 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "panel-page-swnl-v2",
   });
@@ -125,6 +129,7 @@ registerMarkupTest(
   {
     name: "Test Page - start with new line",
     json: {
+      gridLayoutEnabled: false,
       "elements": [
         {
           type: "html",
@@ -143,8 +148,7 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "page-swnl-v2",
   });
@@ -153,6 +157,8 @@ registerMarkupTest(
   {
     name: "Test Page - start with new line with panel and titles",
     json: {
+      gridLayoutEnabled: false,
+      showQuestionNumbers: true,
       "elements": [
         {
           type: "text",
@@ -174,8 +180,7 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "panel-page-swnl-title-v2",
   });
@@ -183,6 +188,7 @@ registerMarkupTest(
   {
     name: "Test Page - Text and Title",
     json: {
+      showQuestionNumbers: true,
       "elements": [
         {
           type: "text",
@@ -191,8 +197,7 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "page-title-v2",
   });
@@ -201,6 +206,8 @@ registerMarkupTest(
   {
     name: "Test Page - start with new line Title",
     json: {
+      gridLayoutEnabled: false,
+      showQuestionNumbers: true,
       "elements": [
         {
           type: "text",
@@ -215,11 +222,33 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "page-swnl-title-v2",
   });
+
+registerMarkupTest({
+  name: "Test Page - questionTitleWidth",
+  json: {
+    showQuestionNumbers: true,
+    "pages": [
+      {
+        "name": "page1",
+        "questionTitleLocation": "left",
+        "questionTitleWidth": "500px",
+        "elements": [
+          {
+            "type": "text",
+            "name": "name",
+            "title": "Employee name:",
+          }
+        ]
+      }]
+  },
+
+  event: "onAfterRenderPage",
+  snapshot: "page-questionTitleWidth",
+});
 
 registerMarkupTest(
   {
@@ -231,7 +260,7 @@ registerMarkupTest(
           name: "name",
           title: "panel_title",
           description: "panel_description",
-          showQuestionNumbers: "off",
+          showQuestionNumbers: false,
           startWithNewLine: false,
           elements: [
             {
@@ -244,8 +273,61 @@ registerMarkupTest(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     event: "onAfterRenderPage",
     snapshot: "panel-question-headers",
+  }
+);
+registerMarkupTest(
+  {
+    name: "Test Panel - Required panel's title",
+    json: {
+      "elements": [
+        {
+          type: "panel",
+          name: "name",
+          isRequired: true,
+          title: "panel_title",
+          showQuestionNumbers: false,
+          startWithNewLine: false,
+          elements: [
+            {
+              type: "text",
+              name: "question1",
+              titleLocation: "hidden",
+            }
+          ]
+        }
+      ]
+    },
+
+    event: "onAfterRenderPage",
+    snapshot: "panel-required-header",
+  }
+);
+registerMarkupTest(
+  {
+    name: "Test Panel - Panel title with number",
+    json: {
+      showQuestionNumbers: true,
+      "elements": [
+        {
+          type: "panel",
+          name: "name",
+          title: "panel_title",
+          showNumber: true,
+          startWithNewLine: false,
+          elements: [
+            {
+              type: "html",
+              name: "question1",
+              description: "<div></div>"
+            }
+          ]
+        }
+      ]
+    },
+
+    event: "onAfterRenderPanel",
+    snapshot: "panel-number",
   });

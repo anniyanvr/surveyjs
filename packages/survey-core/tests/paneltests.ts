@@ -1,0 +1,4888 @@
+import { SurveyModel } from "../src/survey";
+import { PageModel } from "../src/page";
+import { Question, ValidationContext } from "../src/question";
+import { PanelModel, QuestionRowModel } from "../src/panel";
+import { QuestionTextModel } from "../src/question_text";
+import { JsonObject, Serializer } from "../src/jsonobject";
+import { FlowPanelModel } from "../src/flowpanel";
+import { QuestionCheckboxModel } from "../src/question_checkbox";
+import { QuestionRadiogroupModel } from "../src/question_radiogroup";
+import { settings } from "../src/settings";
+import { AdaptiveActionContainer } from "../src/actions/adaptive-container";
+import { ActionContainer } from "../src/actions/container";
+import { IElement } from "../src/base-interfaces";
+import { SurveyElement } from "../src/survey-element";
+import { setOldTheme } from "./oldTheme";
+import { CustomWidgetCollection } from "../src/questionCustomWidgets";
+import { Helpers } from "../src/helpers";
+import { FunctionFactory, registerFunction } from "../src/functionsfactory";
+import { activateLazyRenderingChecks } from "../src/utils/dom-utils";
+import { describe, test, expect, vi } from "vitest";
+describe("Panel", () => {
+  test("questions-elements synhronization", () => {
+    const page = new PageModel();
+    page.addNewQuestion("text", "q1");
+    page.addNewQuestion("text", "q2");
+    page.addNewQuestion("text", "q3");
+    expect(page.questions.length, "There are 3 questions").toBe(3);
+    expect(page.elements.length, "There are 3 elements").toBe(3);
+    page.removeQuestion(page.questions[1]);
+    expect(page.questions.length, "There are 2 questions").toBe(2);
+    expect(page.elements.length, "There are 2 elements").toBe(2);
+    expect((<Question>page.elements[1]).name, "The second element is correct").toBe("q3");
+  });
+
+  test("elements-questions synhronization", () => {
+    const page = new PageModel();
+    page.elements.push(new QuestionTextModel("q1"));
+    page.elements.push(new QuestionTextModel("q2"));
+    page.elements.push(new QuestionTextModel("q3"));
+    expect(page.elements.length, "There are 3 elements").toBe(3);
+    expect(page.questions.length, "There are 3 questions").toBe(3);
+    page.elements.splice(1, 1);
+    expect(page.elements.length, "There are 2 elements").toBe(2);
+    expect(page.questions.length, "There are 2 questions").toBe(2);
+    expect(page.questions[1].name, "The second element is correct").toBe("q3");
+  });
+
+  test("load page from json with old questions", () => {
+    const page = new PageModel();
+    const jsonObject = new JsonObject();
+    jsonObject.toObject(
+      {
+        elements: [
+          { type: "text", name: "q1" },
+          { type: "text", name: "q2" },
+        ],
+      },
+      page
+    );
+    expect(page.elements.length, "There are two elements").toBe(2);
+    expect(page.questions.length, "There are two questions").toBe(2);
+    expect(jsonObject.errors.length, "There is no errors").toBe(0);
+  });
+
+  test("Simple test on nested panel", () => {
+    const page = new PageModel();
+    page.addNewQuestion("text", "q1");
+    const panel = page.addNewPanel("p1");
+    expect(page.elements.length, "There are two elements").toBe(2);
+    expect(page.questions.length, "There is still one question").toBe(1);
+    panel.addNewQuestion("text", "q2_1");
+    panel.addNewQuestion("text", "q2_2");
+    expect(page.elements.length, "There are two elements").toBe(2);
+    expect(page.questions.length, "There are three questions").toBe(3);
+    page.addNewQuestion("text", "q3");
+    expect(page.elements.length, "There are two elements").toBe(3);
+    expect(page.questions.length, "There are four questions").toBe(4);
+    panel.addNewQuestion("text", "q2_3");
+    expect(page.elements.length, "There are two elements").toBe(3);
+    expect(page.questions.length, "There are five questions").toBe(5);
+  });
+
+  test("add questions to list", () => {
+    const page = new PageModel();
+    page.addNewQuestion("text", "q1");
+    const panel = page.addNewPanel("p1");
+    panel.addNewQuestion("text", "q2_1");
+    page.addNewQuestion("text", "q3");
+    const list = [];
+    page.addQuestionsToList(list);
+    expect(list.length, "There are three questions").toBe(3);
+  });
+
+  test("load nested panel from json", () => {
+    const page = new PageModel();
+    const jsonObject = new JsonObject();
+    jsonObject.toObject(
+      {
+        elements: [
+          { type: "text", name: "q1" },
+          {
+            type: "panel",
+            elements: [
+              { type: "text", name: "q1" },
+              { type: "text", name: "q3" },
+            ],
+          },
+          { type: "text", name: "q4" },
+        ],
+      },
+      page
+    );
+    expect(page.elements.length, "There are two elements").toBe(3);
+    expect(page.questions.length, "There are four questions").toBe(4);
+    expect(jsonObject.errors.length, "There is no errors").toBe(0);
+  });
+
+  test("panel rows generation - simple", () => {
+    const page = new PageModel();
+    const q1 = page.addNewQuestion("text", "q1");
+    page.addNewQuestion("text", "q2");
+    expect(page.rows.length, "There are two rows").toBe(2);
+    expect(page.rows[0].visible, "The first row is visible").toBe(true);
+    q1.visible = false;
+    expect(page.rows[0].visible, "The first row is invisible now").toBe(false);
+  });
+
+  test("panel rows generation - startNewLine false", () => {
+    const page = new PageModel();
+    const q1 = page.addNewQuestion("text", "q1");
+    const q2 = page.addNewQuestion("text", "q2");
+    q2.startWithNewLine = false;
+    expect(page.rows.length, "There is one row").toBe(1);
+    expect(page.rows[0].visible, "The first row is visible").toBe(true);
+    q1.visible = false;
+    expect(page.rows[0].visible, "The first row is still visible").toBe(true);
+    q2.visible = false;
+    expect(page.rows[0].visible, "The first row is invisible now").toBe(false);
+  });
+
+  test("panel rows generation - nested panel", () => {
+    const page = new PageModel();
+    page.addNewQuestion("text", "q1");
+    const p1 = page.addNewPanel("p1");
+    const p1q1 = p1.addNewQuestion("text", "p1q1");
+    expect(page.rows.length, "There is two rows").toBe(2);
+    expect(page.rows[1].visible, "The panel row is visible").toBe(true);
+    p1.visible = false;
+    expect(page.rows[1].visible, "The panel row is invisible since panel is invisible").toBe(false);
+    p1.visible = true;
+    expect(page.rows[1].visible, "The panel row is visible since panel is visible").toBe(true);
+    p1q1.visible = false;
+    expect(page.rows[1].visible, "The panel row is invisible since all questions are invisible").toBe(false);
+    p1q1.visible = true;
+    expect(page.rows[1].visible, "The panel row is visible again").toBe(true);
+    p1.removeElement(p1q1);
+    expect(page.rows[1].visible, "The panel row is invisible - it is empty").toBe(false);
+  });
+  test("panel row lazy rendering: nested panel becoming visible via visibleIf force-renders inner rows, Bug#11191", () => {
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    settings.lazyRowsRendering = true;
+    try {
+      const survey = new SurveyModel({
+        elements: [
+          { type: "text", name: "q1" },
+          {
+            type: "panel", name: "p1", visibleIf: "{q1} = 1",
+            elements: [
+              { type: "text", name: "q2" },
+              { type: "text", name: "q3" }
+            ]
+          }
+        ]
+      });
+      const page = survey.pages[0];
+      page.onFirstRendering();
+      const p1 = <PanelModel>survey.getPanelByName("p1");
+      expect(p1.isVisible, "Nested panel starts hidden").toBe(false);
+      expect(p1.rows.length, "Nested panel has two rows built").toBe(2);
+      expect(p1.rows[0].isNeedRender, "Row 0 starts as a lazy skeleton").toBe(false);
+      expect(p1.rows[0].isLazyRendering(), "Row 0 starts in lazy mode").toBe(true);
+
+      survey.setValue("q1", 1);
+
+      expect(p1.isVisible, "Nested panel becomes visible after visibleIf flips").toBe(true);
+      expect(p1.rows[0].isNeedRender, "Row 0 is force-rendered when parent panel becomes visible").toBe(true);
+      expect(p1.rows[1].isNeedRender, "Row 1 is force-rendered when parent panel becomes visible").toBe(true);
+      // Lazy mode is cleared so a subsequent React StrictMode unmount cannot flip isNeedRender back to false
+      expect(p1.rows[0].isLazyRendering(), "Row 0 is no longer lazy after force render").toBe(false);
+      expect(p1.rows[1].isLazyRendering(), "Row 1 is no longer lazy after force render").toBe(false);
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+    }
+  });
+  test("Expand panel on validation error", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel1 = page.addNewPanel("p1");
+    panel1.collapse();
+    const panel2 = panel1.addNewPanel("p2");
+    panel2.collapse();
+    const question = <Question>panel2.addNewQuestion("text", "q1");
+    question.isRequired = true;
+    expect(panel1.isCollapsed, "Panel1 is collapsed").toBe(true);
+    expect(panel2.isCollapsed, "Panel2 is collapsed").toBe(true);
+    page.validate(true, true);
+    expect(panel1.isCollapsed, "Panel1 is not collapsed").toBe(false);
+    expect(panel2.isCollapsed, "Panel2 is not collapsed").toBe(false);
+  });
+  test("Render name if title is empty and panel is expanded or collapsed", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel = page.addNewPanel("p1");
+    expect(panel.locTitle.textOrHtml, "panel title is empty").toBeFalsy();
+    expect(panel.hasTitle, "no title, #1").toBeFalsy();
+    panel.collapse();
+    expect(panel.locTitle.textOrHtml, "panel title is name").toBe("p1");
+    expect(panel.hasTitle, "has title, #2").toBeTruthy();
+    panel.state = "default";
+    expect(panel.locTitle.textOrHtml, "panel title is empty, #2").toBeFalsy();
+    expect(panel.hasTitle, "no title, #3").toBeFalsy();
+    panel.expand();
+    expect(panel.locTitle.textOrHtml, "panel title is name, #2").toBe("p1");
+    expect(panel.hasTitle, "has title, #3").toBeTruthy();
+    panel.title = "some text";
+    expect(panel.locTitle.textOrHtml, "panel title is not empty").toBe("some text");
+    expect(panel.hasTitle, "has title, #4").toBeTruthy();
+    panel.title = "";
+    panel.state = "default";
+    expect(panel.locTitle.textOrHtml, "panel title is empty, #3").toBeFalsy();
+    expect(panel.hasTitle, "no title, #5").toBeFalsy();
+    panel.title = "some text";
+    expect(panel.locTitle.textOrHtml, "panel title is not empty, #2").toBe("some text");
+    expect(panel.hasTitle, "has title, #6").toBeTruthy();
+  });
+  test("Panel.isRequired", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel = page.addNewPanel("p1");
+    const panel2 = page.addNewPanel("p2");
+    const q1 = <Question>panel.addNewQuestion("text", "q1");
+    const q2 = <Question>panel.addNewQuestion("text", "q2");
+    expect(panel.validate(), "There is no errors").toBe(true);
+    expect(panel.hasVisibleErrors, "There is no visible errors").toBe(false);
+    panel.isRequired = true;
+    expect(panel.validate(), "All questions are empty").toBe(false);
+    expect(panel.errors.length, "One error").toBe(1);
+    expect(panel.hasVisibleErrors, "There is visible errors").toBe(true);
+    q1.value = "1";
+    expect(panel.validate(), "The first question is not empty").toBe(true);
+    expect(panel.hasVisibleErrors, "There no visible errors").toBe(false);
+    panel2.isRequired = true;
+    expect(panel.validate(), "There is no visible questions in the panel").toBe(true);
+    expect(panel.hasVisibleErrors, "There no visible errors").toBe(false);
+  });
+  test("Panel.isRequired and hideRequiredErrors, Bug#2679", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel = page.addNewPanel("p1");
+    panel.addNewQuestion("text", "q1");
+    panel.isRequired = true;
+    survey.hideRequiredErrors = true;
+    expect(panel.validate(), "All questions are empty").toBe(false);
+    expect(panel.errors.length, "One error").toBe(1);
+    expect(panel.errors[0].visible, "error is invisible").toBe(false);
+    expect(panel.hasVisibleErrors, "There is error, but it is invisible").toBe(false);
+  });
+  test("Panel.isRequired&checkErrorsMode='onValueChanged', bug#6395", () => {
+    const survey = new SurveyModel({
+      checkErrorsMode: "onValueChanged",
+      elements: [
+        {
+          type: "panel",
+          name: "panel1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+          ],
+          isRequired: true,
+        },
+        {
+          type: "panel",
+          name: "panel2",
+          elements: [
+            {
+              type: "panel",
+              name: "panel3",
+              elements: [
+                {
+                  type: "text",
+                  name: "q2",
+                },
+              ],
+            },
+          ],
+          isRequired: true,
+        }
+      ]
+    });
+    const panel1 = survey.getPanelByName("panel1");
+    const q1 = survey.getQuestionByName("q1");
+    expect(panel1.errors.length, "There is no errors in panel, #1").toBe(0);
+    panel1.validate();
+    expect(panel1.errors.length, "There is an error in panel, #2").toBe(1);
+    q1.value = "abc";
+    expect(panel1.errors.length, "There is no errors in panel, #3").toBe(0);
+
+    const panel2 = survey.getPanelByName("panel2");
+    const q2 = survey.getQuestionByName("q2");
+    expect(panel2.errors.length, "There is no errors in panel, #4").toBe(0);
+    panel2.validate();
+    expect(panel2.errors.length, "There is an error in panel, #5").toBe(1);
+    q2.value = "abc";
+    expect(panel2.errors.length, "There is no errors in panel, #6").toBe(0);
+  });
+  test("Panel.isRequired - error should disappear after a panel's question is answered, Bug#11264", () => {
+    const survey = new SurveyModel({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "question1", isRequired: true },
+            {
+              type: "panel",
+              name: "panel1",
+              isRequired: true,
+              elements: [
+                { type: "boolean", name: "question3" },
+                { type: "radiogroup", name: "question2", choices: ["Item 1", "Item 2", "Item 3"] }
+              ]
+            }
+          ]
+        },
+        {
+          name: "page2",
+          elements: [
+            { type: "checkbox", name: "question4", isRequired: true, choices: ["Item 1", "Item 2", "Item 3"] }
+          ]
+        }
+      ]
+    });
+    survey.nextPage();
+    const panel1 = survey.getPanelByName("panel1");
+    expect(panel1.errors.length, "panel has required error after nextPage").toBe(1);
+    survey.setValue("question2", "Item 1");
+    expect(panel1.errors.length, "panel error should disappear after answering panel question").toBe(0);
+  });
+  test("Panel.isRequired - error should disappear after a panel's question is answered, checkErrorsMode='onValueChanged', Bug#11264", () => {
+    const survey = new SurveyModel({
+      checkErrorsMode: "onValueChanged",
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "question1", isRequired: true },
+            {
+              type: "panel",
+              name: "panel1",
+              isRequired: true,
+              elements: [
+                { type: "boolean", name: "question3" },
+                { type: "radiogroup", name: "question2", choices: ["Item 1", "Item 2", "Item 3"] }
+              ]
+            }
+          ]
+        },
+        {
+          name: "page2",
+          elements: [
+            { type: "checkbox", name: "question4", isRequired: true, choices: ["Item 1", "Item 2", "Item 3"] }
+          ]
+        }
+      ]
+    });
+    survey.nextPage();
+    const panel1 = survey.getPanelByName("panel1");
+    expect(panel1.errors.length, "panel has required error after nextPage, onValueChanged").toBe(1);
+    survey.setValue("question2", "Item 1");
+    expect(panel1.errors.length, "panel error should disappear after answering panel question, onValueChanged").toBe(0);
+  });
+  test("Panel with paneldynamic error focus", () => {
+    const json = {
+      elements: [
+        {
+          name: "p1",
+          type: "panel",
+          elements: [
+            {
+              type: "paneldynamic",
+              name: "paneldynamic1",
+              panelCount: 1,
+              templateElements: [
+                { type: "text", name: "textinpd", isRequired: true },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const survey = new SurveyModel(json);
+    const context = new ValidationContext({ fireCallback: true, focusOnFirstError: true });
+    const panel = survey.getPanelByName("p1");
+
+    survey.isCurrentPageHasErrors;
+    panel.validateElement(context);
+
+    expect(context.firstErrorQuestion?.name, "scroll to first question in the dynamicpanel instead of dynamicpanel itself").toBe("textinpd");
+  });
+  test("Required panel error focus/not focus - T3101 - Stop focus when page has error", () => {
+    var focusedQuestionId = "";
+    const oldFunc = SurveyElement.FocusElement;
+    SurveyElement.FocusElement = function (elId: string): boolean {
+      focusedQuestionId = elId;
+      return true;
+    };
+    const json = {
+      elements: [
+        { type: "text", name: "chk0" },
+        {
+          name: "p1",
+          type: "panel",
+          isRequired: true,
+          elements: [
+            { type: "text", name: "chk1", isRequired: true },
+            {
+              type: "panel",
+              name: "panel",
+              elements: [
+                { type: "text", name: "textinpd", isRequired: true },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const survey = new SurveyModel(json);
+    const page = <PageModel>survey.currentPage;
+
+    let context = new ValidationContext({ fireCallback: true, focusOnFirstError: true });
+    page.validateElement(context);
+    expect(context.firstErrorQuestion.name, "scroll to first question in the dynamicpanel instead of dynamicpanel itself").toBe("chk1");
+    expect(focusedQuestionId, "focus the question").toBe(context.firstErrorQuestion.inputId);
+
+    focusedQuestionId = "";
+    context = new ValidationContext({ fireCallback: true, focusOnFirstError: false });
+    page.validateElement(context);
+    expect(focusedQuestionId, "don't scroll to question - T3101 - Stop focus when page has error").toBeFalsy();
+    SurveyElement.FocusElement = oldFunc;
+  });
+
+  test("Panel.getValue()", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel1 = page.addNewPanel("p1");
+    const panel2 = page.addNewPanel("p2");
+    const panel3 = panel1.addNewPanel("p3");
+    panel1.addNewQuestion("text", "q1");
+    panel2.addNewQuestion("text", "q2");
+    panel3.addNewQuestion("text", "q3");
+    panel1.addNewQuestion("text", "qEmpty");
+    survey.setValue("q1", "val1");
+    survey.setValue("q2", "val2");
+    survey.setValue("q3", "val3");
+
+    expect(panel3.getValue(), "Nested panel.getValue() works correctly").toEqual({ q3: "val3" });
+    expect(panel1.getValue(), "Panel.getValue()  works correctly").toEqual({ q1: "val1", q3: "val3" });
+    expect(page.getValue(), "Page.getValue() works correctly").toEqual({ q1: "val1", q2: "val2", q3: "val3" });
+    expect(page.getValue(), "survey.data == page.getValue() in our case").toEqual(survey.data);
+  });
+
+  test("Panel.getValue() + others, Bug# 1573, T1701", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "radiogroup",
+          name: "spread",
+          showOtherItem: true,
+          choices: [
+            {
+              value: "butter",
+              text: "Butter",
+            },
+          ],
+        },
+      ],
+    });
+    survey.setValue("spread", "other");
+    survey.setComment("spread", "Jam");
+    expect(survey.data, "survey.data is correct").toEqual({ spread: "other", "spread-Comment": "Jam" });
+    expect(survey.currentPage.getValue(), "survey.currentPage.getValue() is correct").toEqual({ spread: "other", "spread-Comment": "Jam" });
+    const question = <QuestionCheckboxModel>survey.getQuestionByName("spread");
+    question.otherValue = "";
+    question.value = "butter";
+    expect(survey.data, "survey.data is correct, not other").toEqual({ spread: "butter" });
+    expect(survey.currentPage.getValue(), "survey.currentPage.getValue() is correct, not other").toEqual({ spread: "butter" });
+    survey.storeOthersAsComment = false;
+    question.value = "other";
+    question.otherValue = "Jam";
+    expect(survey.data, "survey.data is correct, other +  storeOthersAsComment = false").toEqual({ spread: "Jam" });
+    expect(survey.currentPage.getValue(), "survey.currentPage.getValue() is correct + storeOthersAsComment = false").toEqual({ spread: "Jam" });
+  });
+
+  test("Panel.getComments()", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page1");
+    const panel1 = page.addNewPanel("p1");
+    const panel2 = page.addNewPanel("p2");
+    const panel3 = panel1.addNewPanel("p3");
+    panel1.addNewQuestion("text", "q1");
+    panel2.addNewQuestion("text", "q2");
+    panel3.addNewQuestion("text", "q3");
+    panel1.addNewQuestion("text", "qEmpty");
+    survey.setComment("q1", "val1");
+    survey.setComment("q2", "val2");
+    survey.setComment("q3", "val3");
+
+    expect(panel3.getComments(), "Nested panel.getComments() works correctly").toEqual({ q3: "val3" });
+    expect(panel1.getComments(), "Panel.getComments()  works correctly").toEqual({ q1: "val1", q3: "val3" });
+    expect(page.getComments(), "Page.getComments() works correctly").toEqual({ q1: "val1", q2: "val2", q3: "val3" });
+  });
+
+  test("Page getPanels and Survey getAllPanels", () => {
+    const survey = new SurveyModel();
+    const page1 = survey.addNewPage("page1");
+    const panel1 = page1.addNewPanel("p1");
+    const panel2 = page1.addNewPanel("p2");
+
+    const page2 = survey.addNewPage("page2");
+    const panel3 = page2.addNewPanel("p3");
+
+    expect(survey.getAllPanels().length, "There are 3 panels in the survey").toBe(3);
+    expect(survey.pages[0].getPanels().length, "There are 2 panels in the first page").toBe(2);
+    expect(survey.pages[1].getPanels().length, "There is 1 panel in the second page").toBe(1);
+  });
+
+  test("Get first focused question correctly, Bug#1417", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "html", name: "q1" },
+        {
+          type: "panel",
+          name: "p1",
+          visible: false,
+          elements: [
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", isRequired: true },
+          ],
+        },
+        {
+          type: "panel",
+          name: "p2",
+          visible: false,
+          elements: [
+            {
+              type: "panel",
+              name: "p3",
+              elements: [
+                { type: "text", name: "q4" },
+                { type: "text", name: "q5", isRequired: true },
+              ],
+            },
+          ],
+        },
+        {
+          type: "panel",
+          name: "p4",
+          elements: [
+            { type: "text", name: "q6" },
+            { type: "text", name: "q7", isRequired: true },
+          ],
+        },
+      ],
+    });
+    const page = survey.pages[0];
+    page.validate(true);
+    expect(page.getFirstQuestionToFocus().name, "The first question for focusing is q6").toBe("q6");
+    expect(page.getFirstQuestionToFocus(true).name, "The first question for focusing with errors is q7").toBe("q7");
+  });
+  test("Get first focused error question for matrix cell", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "matrixdynamic",
+          name: "matrix",
+          rowCount: 1,
+          columns: [
+            {
+              cellType: "text",
+              name: "col1",
+              isRequired: true
+            },
+          ],
+        }
+      ],
+    });
+    const page = survey.pages[0];
+    page.validate(true);
+    expect(page.getFirstQuestionToFocus(true).name, "The first question for focusing is matrix cell question").toBe("col1");
+  });
+  test("Get first focused error question for panel dynamic question", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "paneldynamic",
+          name: "panel",
+          panelCount: 1,
+          templateElements: [
+            {
+              type: "text",
+              name: "question1",
+              isRequired: true
+            },
+          ],
+        }
+      ],
+    });
+    const page = survey.pages[0];
+    page.validate(true);
+    expect(page.getFirstQuestionToFocus(true).name, "The first question for focusing is in matrix dynamic").toBe("question1");
+  });
+  test("Get first focused question on collapsed panel", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "panel",
+          name: "panel1",
+          state: "collapsed",
+          elements: [{ type: "text", name: "q1", isRequired: true }],
+        },
+        { type: "text", name: "q2" }
+      ],
+    });
+    const page = survey.pages[0];
+    expect(page.getFirstQuestionToFocus().name, "q1 is in collapsed panel").toBe("q2");
+    expect(page.getFirstQuestionToFocus(false, true).name, "ignore collapsed state").toBe("q1");
+    page.validate(true);
+    expect(page.getFirstQuestionToFocus(true).name, "q1 has error").toBe("q1");
+  });
+  test("Flow Panel, add new element/remove element", () => {
+    const panel = new FlowPanelModel("p");
+    panel.addNewQuestion("text", "q1");
+    expect(panel.content, "element was added into content").toBe("{element:q1}");
+    panel.removeElement(panel.elements[0]);
+    expect(panel.content, "element is removed from content").toBe("");
+  });
+
+  test("getLayoutType()", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("p");
+    const q1 = page.addNewQuestion("text", "q1");
+    const flowPanel = new FlowPanelModel("flowPanel");
+    page.addElement(flowPanel);
+    const panel = page.addNewPanel("panel");
+    const q2 = panel.addNewQuestion("text", "q2");
+    const q3 = flowPanel.addNewQuestion("text", "q3");
+
+    expect(page.getLayoutType()).toBe("row");
+    expect(panel.getLayoutType()).toBe("row");
+    expect(flowPanel.getLayoutType()).toBe("row");
+    expect(panel.getChildrenLayoutType()).toBe("row");
+    expect(flowPanel.getChildrenLayoutType()).toBe("flow");
+    expect(q1.getLayoutType()).toBe("row");
+    expect(q2.getLayoutType()).toBe("row");
+    expect(q3.getLayoutType()).toBe("flow");
+  });
+
+  test("Hide question title for flow layout", () => {
+    const flowPanel = new FlowPanelModel("flowPanel");
+    const q = flowPanel.addNewQuestion("text", "q");
+    expect(q.getTitleLocation(), "Hide for flow layout").toBe("hidden");
+  });
+  test("Do not generate rows and do not set renderWidth", () => {
+    const flowPanel = new FlowPanelModel("flowPanel");
+    const q = flowPanel.addNewQuestion("text", "q");
+    expect(flowPanel.rows.length, "There is no rows").toBe(0);
+    expect(q.renderWidth, "render width is empty").toBe("");
+  });
+  test("question.cssRoot class", () => {
+    const survey = new SurveyModel();
+    setOldTheme(survey);
+    const page = survey.addNewPage("p");
+    const flowPanel = new FlowPanelModel("flowPanel");
+    page.addElement(flowPanel);
+    const q1 = flowPanel.addNewQuestion("text", "q1");
+    const q2 = page.addNewQuestion("text", "q2");
+    expect(q1.cssRoot, "flow question.cssRoot").toBe("sv_q_flow sv_qstn");
+    expect(q2.cssRoot, "non flow question.cssRoot").toBe("sv_q sv_qstn");
+    q1.titleLocation = "left";
+    q2.titleLocation = "left";
+    expect(q1.cssRoot, "flow question.cssRoot").toBe("sv_q_flow sv_qstn");
+    expect(q2.cssRoot, "non flow question.cssRoot").toBe("sv_q sv_qstn sv_qstn_left");
+  });
+  test("FlowPanel: checkbox and radiogroup - always keep colCount to 0", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("p");
+    const flowPanel = new FlowPanelModel("flowPanel");
+    page.addElement(flowPanel);
+    const q1 = <QuestionCheckboxModel>flowPanel.addNewQuestion("checkbox", "q1");
+    const q2 = <QuestionRadiogroupModel>(
+      flowPanel.addNewQuestion("radiogroup", "q2")
+    );
+    expect(q1.colCount, "checkbox.colCount is 0 now").toBe(0);
+    expect(q2.colCount, "radiogroup.colCount is 0 now").toBe(0);
+    const q3 = new QuestionCheckboxModel("q3");
+    q3.colCount = 2;
+    flowPanel.addElement(q3);
+    expect(q3.colCount, "q3.colCount is 0 now").toBe(0);
+    q2.colCount = 2;
+    expect(q2.colCount, "radiogroup.colCount is still 0").toBe(0);
+  });
+  test("FlowPanel: support limited number of questions", () => {
+    const flowPanel = new FlowPanelModel("flowPanel");
+    expect(flowPanel.addNewPanel("p1"), "We can't add panel").toBeFalsy();
+    expect(flowPanel.addNewQuestion("matrix", "q1"), "We can't add matrix").toBeFalsy();
+    expect(flowPanel.addNewQuestion("boolean", "q1"), "We can add boolean").toBeTruthy();
+  });
+
+  test("PageModel: isDesignMode && allowShowEmptyTitleInDesignMode", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    expect(page.hasTitle, "Empty title is not visible at runtime").toBeFalsy();
+    expect(page._showDescription, "Empty description is not visible at runtime - description").toBeFalsy();
+    survey.setDesignMode(true);
+    expect(page.hasTitle, "Empty title is visible in DesignMode by default").toBeTruthy();
+    expect(page._showDescription, "Empty description is visible in DesignMode by default").toBeTruthy();
+    settings.allowShowEmptyDescriptionInDesignMode = false;
+    expect(page.hasTitle, "Empty title is visible in DesignMode after description flag").toBeTruthy();
+    expect(page._showDescription, "Empty description is not visible in DesignMode after description flag").toBeFalsy();
+    settings.allowShowEmptyDescriptionInDesignMode = true;
+    settings.allowShowEmptyTitleInDesignMode = false;
+    expect(page.hasTitle, "Empty title is not visible at DesignMode after title flag").toBeFalsy();
+    expect(page._showDescription, "Empty description is not visible at DesignMode after tile flag").toBeFalsy();
+    page.title = "My title";
+    page.description = "My description";
+    expect(page.hasTitle, "Entered title is visible in DesignMode").toBeTruthy();
+    expect(page._showDescription, "Entered description is visible in DesignMode").toBeTruthy();
+    page.title = "";
+    page.description = "";
+    expect(page.hasTitle, "No title").toBeFalsy();
+    expect(page._showDescription, "No description").toBeFalsy();
+  });
+  function withDesignModeSettings(showEmptyTitles: boolean, showEmptyDescriptions: boolean, func: () => void): void {
+    const oldTitles = settings.designMode.showEmptyTitles;
+    const oldDescriptions = settings.designMode.showEmptyDescriptions;
+    settings.designMode.showEmptyTitles = showEmptyTitles;
+    settings.designMode.showEmptyDescriptions = showEmptyDescriptions;
+    try {
+      func();
+    } finally {
+      settings.designMode.showEmptyTitles = oldTitles;
+      settings.designMode.showEmptyDescriptions = oldDescriptions;
+    }
+  }
+  function createDesignSurveyWithEmptyPage(): { survey: SurveyModel, page: PageModel } {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    survey.setDesignMode(true);
+    return { survey, page };
+  }
+  test("Design mode: the survey's showEmpty*InDesignMode wins over settings.designMode for an empty page", () => {
+    withDesignModeSettings(true, true, () => {
+      const { survey, page } = createDesignSurveyWithEmptyPage();
+      survey.showEmptyTitlesInDesignMode = false;
+      survey.showEmptyDescriptionsInDesignMode = false;
+      expect(page.hasTitle, "settings true, survey false: title hidden").toBe(false);
+      expect(page._showDescription, "settings true, survey false: description hidden").toBe(false);
+    });
+    withDesignModeSettings(false, false, () => {
+      const { survey, page } = createDesignSurveyWithEmptyPage();
+      survey.showEmptyTitlesInDesignMode = true;
+      survey.showEmptyDescriptionsInDesignMode = true;
+      expect(page.hasTitle, "settings false, survey true: title shown").toBe(true);
+      expect(page._showDescription, "settings false, survey true: description shown").toBe(true);
+    });
+  });
+  test("Design mode: showEmpty*InDesignMode follows settings.designMode until set and after it is set to undefined", () => {
+    withDesignModeSettings(false, true, () => {
+      const survey = new SurveyModel();
+      expect(survey.showEmptyTitlesInDesignMode, "titles follow the setting (false)").toBe(false);
+      expect(survey.showEmptyDescriptionsInDesignMode, "descriptions follow the setting (true)").toBe(true);
+      settings.designMode.showEmptyTitles = true;
+      settings.designMode.showEmptyDescriptions = false;
+      expect(survey.showEmptyTitlesInDesignMode, "titles follow the changed setting").toBe(true);
+      expect(survey.showEmptyDescriptionsInDesignMode, "descriptions follow the changed setting").toBe(false);
+
+      survey.showEmptyTitlesInDesignMode = false;
+      survey.showEmptyDescriptionsInDesignMode = true;
+      expect(survey.showEmptyTitlesInDesignMode, "titles: survey value").toBe(false);
+      expect(survey.showEmptyDescriptionsInDesignMode, "descriptions: survey value").toBe(true);
+      expect(settings.designMode.showEmptyTitles, "the survey does not write the title setting").toBe(true);
+      expect(settings.designMode.showEmptyDescriptions, "the survey does not write the description setting").toBe(false);
+
+      survey.showEmptyTitlesInDesignMode = undefined;
+      survey.showEmptyDescriptionsInDesignMode = undefined;
+      expect(survey.showEmptyTitlesInDesignMode, "titles follow the setting again").toBe(true);
+      expect(survey.showEmptyDescriptionsInDesignMode, "descriptions follow the setting again").toBe(false);
+
+      (<any>survey).showEmptyTitlesInDesignMode = null;
+      (<any>survey).showEmptyDescriptionsInDesignMode = null;
+      expect(survey.showEmptyTitlesInDesignMode, "null titles follow the setting").toBe(true);
+      expect(survey.showEmptyDescriptionsInDesignMode, "null descriptions follow the setting").toBe(false);
+    });
+  });
+  test("Design mode: showEmptyDescriptionsInDesignMode hides an empty panel description", () => {
+    withDesignModeSettings(true, true, () => {
+      const survey = new SurveyModel();
+      const page = survey.addNewPage("page");
+      const panel = page.addNewPanel("panel");
+      panel.title = "My panel";
+      survey.setDesignMode(true);
+      expect(panel._showDescription, "shown by the setting").toBe(true);
+      survey.showEmptyDescriptionsInDesignMode = false;
+      expect(panel._showDescription, "hidden by the survey value").toBe(false);
+    });
+  });
+  test("Design mode: an entered page title and description are shown when showEmpty*InDesignMode is false", () => {
+    withDesignModeSettings(true, true, () => {
+      const { survey, page } = createDesignSurveyWithEmptyPage();
+      survey.showEmptyTitlesInDesignMode = false;
+      survey.showEmptyDescriptionsInDesignMode = false;
+      expect(page.hasTitle, "empty title hidden").toBe(false);
+      expect(page._showDescription, "empty description hidden").toBe(false);
+      page.title = "My title";
+      page.description = "My description";
+      expect(page.hasTitle, "entered title is shown").toBe(true);
+      expect(page._showDescription, "entered description is shown").toBe(true);
+    });
+  });
+  test("Design mode: beforeShowInplaceDescriptionEditorCallback gets the visibility from showEmptyDescriptionsInDesignMode", () => {
+    withDesignModeSettings(true, true, () => {
+      const { survey, page } = createDesignSurveyWithEmptyPage();
+      page.title = "My page";
+      survey.showEmptyDescriptionsInDesignMode = false;
+      const shows: Array<boolean> = [];
+      survey.beforeShowInplaceDescriptionEditorCallback = (el: any, show: boolean): boolean => {
+        if (el === page) shows.push(show);
+        return show;
+      };
+      expect(page._showDescription, "empty description hidden").toBe(false);
+      expect(shows.length > 0, "the callback is called").toBe(true);
+      expect(shows.every(show => show === false), "the callback always gets show = false").toBe(true);
+    });
+  });
+  test("Design mode: showEmpty*InDesignMode are not serialized", () => {
+    const survey = new SurveyModel({ pages: [{ name: "page1", elements: [{ type: "text", name: "q1" }] }] });
+    survey.showEmptyTitlesInDesignMode = false;
+    survey.showEmptyDescriptionsInDesignMode = true;
+    const json = survey.toJSON();
+    expect(json.showEmptyTitlesInDesignMode, "titles are not in JSON").toBeUndefined();
+    expect(json.showEmptyDescriptionsInDesignMode, "descriptions are not in JSON").toBeUndefined();
+    expect(json, "JSON is the survey definition only").toStrictEqual({ pages: [{ name: "page1", elements: [{ type: "text", name: "q1" }] }] });
+  });
+  test("Design mode: with no survey value, an empty page follows settings.designMode both ways", () => {
+    withDesignModeSettings(true, true, () => {
+      const { page } = createDesignSurveyWithEmptyPage();
+      expect(page.hasTitle, "settings true: title shown").toBe(true);
+      expect(page._showDescription, "settings true: description shown").toBe(true);
+      settings.designMode.showEmptyTitles = false;
+      settings.designMode.showEmptyDescriptions = false;
+      expect(page.hasTitle, "settings false: title hidden").toBe(false);
+      expect(page._showDescription, "settings false: description hidden").toBe(false);
+    });
+  });
+  test("PageModel: _showDescription honors beforeShowInplaceDescriptionEditorCallback, empty & non-empty", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    page.title = "My page";
+    survey.setDesignMode(true);
+    // Shown by default in design mode
+    expect(page._showDescription, "empty description shown by default").toBeTruthy();
+
+    let show = true;
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (_el: any, defaultShow: boolean): boolean => show;
+
+    // Empty description
+    show = false;
+    expect(page._showDescription, "empty description hidden by the callback").toBeFalsy();
+    show = true;
+    expect(page._showDescription, "empty description shown by the callback").toBeTruthy();
+
+    // Non-empty description
+    page.description = "My description";
+    show = false;
+    expect(page._showDescription, "non-empty description hidden by the callback").toBeFalsy();
+    show = true;
+    expect(page._showDescription, "non-empty description shown by the callback").toBeTruthy();
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PageModel: setting/clearing the description resets hasDescription so the design surface re-renders", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    page.title = "My page";
+    survey.setDesignMode(true);
+    // Show the description only while it is not empty (a dynamic decision).
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => !!el.description;
+
+    const changedProps: Array<string> = [];
+    page.onPropertyChanged.add((_, opt) => changedProps.push(opt.name));
+
+    // Reading _showDescription primes hasDescription (its reset drives the re-render).
+    expect(page._showDescription, "empty -> hidden").toBeFalsy();
+
+    changedProps.length = 0;
+    page.description = "Hello";
+    // hasDescription notification must fire so the page re-renders.
+    expect(changedProps.indexOf("hasDescription") > -1, "hasDescription notified on set").toBeTruthy();
+    expect(page._showDescription, "non-empty -> shown").toBeTruthy();
+
+    changedProps.length = 0;
+    page.description = "";
+    expect(changedProps.indexOf("hasDescription") > -1, "hasDescription notified on clear").toBeTruthy();
+    expect(page._showDescription, "cleared -> hidden").toBeFalsy();
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PageModel: _showDescription passes the default visibility to the callback, not the callback's own result", () => {
+    const oldShowEmpty = settings.designMode.showEmptyDescriptions;
+    settings.designMode.showEmptyDescriptions = false;
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    page.title = "My page";
+    page.description = "My description";
+    survey.setDesignMode(true);
+    // A callback that hides the description. Its result must not become its own default afterwards.
+    const defaults: Array<boolean> = [];
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any, show: boolean): boolean => {
+      if (el === page) defaults.push(show);
+      return false;
+    };
+
+    expect(page._showDescription, "hidden by the callback").toBeFalsy();
+    defaults.length = 0;
+    expect(page._showDescription, "still hidden by the callback").toBeFalsy();
+    // The page has a description, so the default stays true however the callback voted before.
+    expect(defaults, "the callback gets the default visibility, not its previous result").toStrictEqual([true]);
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+    settings.designMode.showEmptyDescriptions = oldShowEmpty;
+  });
+  test("PanelModel: hasDescription is reset when the description is changed via its localizable string", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    const panel = page.addNewPanel("panel");
+    panel.title = "My panel";
+    survey.setDesignMode(true);
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => !!el.description;
+
+    expect(panel.hasDescription, "empty -> hidden").toBeFalsy();
+    // The property grid and the in-place editor modify the localizable string directly.
+    panel.locDescription.text = "Hello";
+    expect(panel.hasDescription, "non-empty -> shown").toBeTruthy();
+    panel.locDescription.text = "";
+    expect(panel.hasDescription, "cleared -> hidden").toBeFalsy();
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PanelModel: hasDescription is reset when the title is changed, since the callback depends on it", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    const panel = page.addNewPanel("panel");
+    panel.description = "My description";
+    survey.setDesignMode(true);
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => !!el.title && !!el.description;
+
+    expect(panel.hasDescription, "no title -> hidden").toBeFalsy();
+    panel.title = "My panel";
+    expect(panel.hasDescription, "title set -> shown").toBeTruthy();
+    panel.locTitle.text = "";
+    expect(panel.hasDescription, "title cleared -> hidden").toBeFalsy();
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PanelModel: beforeShowInplaceDescriptionEditorCallback is called on every title/description change", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    const panel = page.addNewPanel("panel");
+    survey.setDesignMode(true);
+    // The callback decides on both the title and the description.
+    const calls: Array<any> = [];
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => {
+      const show = !!el.title && !!el.description;
+      if (el === panel) calls.push({ title: el.title, description: el.description, show: show });
+      return show;
+    };
+    // The first render calculates the visibility.
+    expect(panel.hasDescription, "no title, no description -> hidden").toBeFalsy();
+    calls.length = 0;
+
+    // Nothing below reads hasDescription: each change must call the callback by itself, otherwise
+    // the UI is never told to re-render the description.
+    panel.description = "My description";
+    expect(calls.length, "called after the description is set").toBe(1);
+    expect(calls[0], "the callback sees the new description").toStrictEqual(
+      { title: "", description: "My description", show: false });
+
+    panel.title = "My panel";
+    expect(calls.length, "called after the title is set").toBe(2);
+    expect(calls[1], "the callback sees the new title").toStrictEqual(
+      { title: "My panel", description: "My description", show: true });
+
+    panel.title = "";
+    expect(calls.length, "called after the title is cleared").toBe(3);
+    expect(calls[2], "the callback sees the cleared title").toStrictEqual(
+      { title: "", description: "My description", show: false });
+
+    // The value is already calculated, so reading it calls the callback no more.
+    expect(panel.hasDescription, "no title -> hidden").toBeFalsy();
+    expect(calls.length, "reading hasDescription calls the callback no more").toBe(3);
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PanelModel: a title/description change notifies hasDescription with the new value", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    const panel = page.addNewPanel("panel");
+    panel.description = "My description";
+    survey.setDesignMode(true);
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => !!el.title && !!el.description;
+
+    const notified: Array<any> = [];
+    panel.onPropertyChanged.add((_, opt) => { if (opt.name === "hasDescription") notified.push(opt.newValue); });
+
+    // The first render calculates the visibility.
+    expect(panel.hasDescription, "no title -> hidden").toBeFalsy();
+    expect(notified.length, "calculating the visibility notifies nothing").toBe(0);
+
+    // The UI re-renders on the notification, so it must carry the new visibility, not undefined.
+    panel.title = "My panel";
+    expect(notified, "hasDescription notified as true when the title is set").toStrictEqual([true]);
+
+    panel.title = "";
+    expect(notified, "hasDescription notified as false when the title is cleared").toStrictEqual([true, false]);
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+  test("PanelModel: a title change does not calculate the description visibility before it is rendered", () => {
+    const survey = new SurveyModel();
+    const page = survey.addNewPage("page");
+    const panel = page.addNewPanel("panel");
+    panel.description = "My description";
+    survey.setDesignMode(true);
+    let callCount = 0;
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = (el: any): boolean => {
+      if (el === panel) callCount++;
+      return !!el.title && !!el.description;
+    };
+
+    const notified: Array<string> = [];
+    panel.onPropertyChanged.add((_, opt) => notified.push(opt.name));
+
+    // hasDescription has never been requested, so nothing recalculates it and nothing is notified.
+    panel.title = "My panel";
+    expect(callCount, "the callback is not called for a panel that is not rendered yet").toBe(0);
+    expect(notified.indexOf("hasDescription"), "hasDescription is not notified").toBe(-1);
+
+    // It is calculated on the first read instead.
+    expect(panel.hasDescription, "title and description are set -> shown").toBeTruthy();
+    expect(callCount, "the callback is called on the first read").toBe(1);
+
+    (<any>survey).beforeShowInplaceDescriptionEditorCallback = undefined;
+  });
+
+  test("Page/Panel.getProgressInfo()", () => {
+    const page = new PageModel("q1");
+    const panel1 = page.addNewPanel("panel1");
+    const panel2 = page.addNewPanel("panel2");
+    panel1.isRequired = true;
+    panel1.addNewQuestion("text", "q1");
+    panel1.addNewQuestion("text", "q2");
+    panel2.addNewQuestion("text", "q3").isRequired = true;
+    panel2.addNewQuestion("text", "q4");
+    panel2.addNewQuestion("html", "q5");
+    panel2.addNewQuestion("expression", "q6");
+    page.getQuestionByName("q1").value = 1;
+    page.getQuestionByName("q3").value = 2;
+    expect(page.getProgressInfo()).toEqual({
+      questionCount: 4,
+      answeredQuestionCount: 2,
+      requiredQuestionCount: 2,
+      requiredAnsweredQuestionCount: 2,
+    });
+  });
+  test("Panel.requiredIf", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "text",
+          name: "q1",
+        },
+        {
+          type: "panel",
+          name: "panel1",
+          requiredIf: "{q1} = 1",
+          elements: [{ type: "text", name: "q3" }],
+        },
+      ],
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    expect(panel.isRequired, "It is not required by default").toBe(false);
+    survey.setValue("q1", 1);
+    expect(panel.isRequired, "q1 is 1").toBe(true);
+    survey.setValue("q1", 2);
+    expect(panel.isRequired, "q1 is 2").toBe(false);
+  });
+
+  test("Panel.ensureRowsVisibility", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "panel",
+              name: "panel1",
+              elements: [
+                {
+                  type: "text",
+                  name: "question1",
+                },
+                {
+                  type: "checkbox",
+                  name: "question2",
+                  choices: ["item1", "item2", "item3"],
+                },
+              ],
+              state: "collapsed",
+            },
+          ],
+        },
+      ],
+    };
+
+    let counter = 0;
+    let handler = () => counter++;
+
+    const survey = new SurveyModel(json);
+    const panel: PanelModel = <PanelModel>survey.getAllPanels()[0];
+    const page = survey.currentPage;
+    expect(panel.rows.length).toBe(2);
+
+    panel.rows.forEach((row) => {
+      expect(row["_updateVisibility"]).toBeUndefined();
+      expect(row["_scrollableParent"]).toBeUndefined();
+      row["_updateVisibility"] = handler;
+    });
+    expect(counter).toBe(0);
+
+    panel.ensureRowsVisibility();
+    expect(counter).toBe(2);
+  });
+
+  test("Panel.startLazyRendering isNeedRender=true", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "panel",
+              name: "panel1",
+              elements: [
+                {
+                  type: "text",
+                  name: "question1",
+                },
+                {
+                  type: "checkbox",
+                  name: "question2",
+                  choices: ["item1", "item2", "item3"],
+                },
+              ],
+              state: "collapsed",
+            },
+          ],
+        },
+      ],
+    };
+
+    const prevLazyRowsRenderingStartRow = settings.lazyRowsRenderingStartRow;
+    const createdDivs: Array<HTMLElement> = [];
+    try {
+      settings.lazyRowsRenderingStartRow = 0;
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const panel: PanelModel = <PanelModel>survey.getAllPanels()[0];
+      const page = survey.currentPage;
+      expect(panel.rows.length).toBe(2);
+
+      panel.rows.forEach((row) => {
+        expect(row["_scrollableParent"]).toBeUndefined();
+        expect(row["_updateVisibility"]).toBeUndefined();
+        expect(row.isNeedRender).toBe(false);
+        const div = document.createElement("div");
+        createdDivs.push(div);
+        row.startLazyRendering(div, () => {
+          return <any>{ scrollHeight: 200, clientHeight: 300 };
+        });
+        expect(row["_scrollableParent"]).not.toBeUndefined();
+        expect(row["_updateVisibility"]).toBeUndefined();
+        expect(row.isNeedRender).toBe(true);
+
+        row.stopLazyRendering();
+        expect(row["_scrollableParent"]).toBeUndefined();
+        expect(row["_updateVisibility"]).toBeUndefined();
+        expect(row.isNeedRender).toBe(true);
+      });
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevLazyRowsRenderingStartRow;
+      createdDivs.forEach(div => div?.remove());
+    }
+  });
+
+  test("Panel.startLazyRendering isNeedRender=false", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "panel",
+              name: "panel1",
+              elements: [
+                {
+                  type: "text",
+                  name: "question1",
+                },
+                {
+                  type: "checkbox",
+                  name: "question2",
+                  choices: ["item1", "item2", "item3"],
+                },
+              ],
+              state: "collapsed",
+            },
+          ],
+        },
+      ],
+    };
+
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRendering = true;
+    settings.lazyRowsRenderingStartRow = 0;
+    const createdDivs: Array<HTMLElement> = [];
+    try {
+      const survey = new SurveyModel(json);
+      const panel: PanelModel = <PanelModel>survey.getAllPanels()[0];
+      const page = survey.currentPage;
+      expect(panel.rows.length).toBe(2);
+
+      panel.rows.forEach((row) => {
+        expect(row["_scrollableParent"]).toBeUndefined();
+        expect(row["_updateVisibility"]).toBeUndefined();
+        expect(row.isNeedRender).toBe(false);
+        const div = document.createElement("div");
+        createdDivs.push(div);
+        row.startLazyRendering(div, () => {
+          return <any>{ scrollHeight: 200, clientHeight: 100 };
+        });
+        expect(row["_scrollableParent"]).not.toBeUndefined();
+        expect(row["_updateVisibility"]).not.toBeUndefined();
+        expect(row.isNeedRender).toBe(false);
+
+        row.stopLazyRendering();
+        expect(row["_scrollableParent"]).toBeUndefined();
+        expect(row["_updateVisibility"]).toBeUndefined();
+        expect(row.isNeedRender).toBe(false);
+      });
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+      createdDivs.forEach(div => div?.remove());
+    }
+  });
+  describe("Lazy rendering: rows share a scroll container", () => {
+    const createLazySurvey = (rowCount: number): { survey: SurveyModel, rows: Array<QuestionRowModel> } => {
+      const elements: Array<any> = [];
+      for (let i = 0; i < rowCount; i++) {
+        elements.push({ type: "text", name: "q" + i });
+      }
+      const survey = new SurveyModel({ elements: [{ type: "panel", name: "panel1", elements: elements }] });
+      survey.lazyRenderEnabled = true;
+      const panel = <PanelModel>survey.getPanelByName("panel1");
+      expect(panel.rows.length, "a row per question").toBe(rowCount);
+      return { survey, rows: panel.rows };
+    };
+    const setRowDivVisible = (div: HTMLElement, visible: boolean): void => {
+      Object.defineProperty(div, "offsetHeight", { configurable: true, value: 100 });
+      const top = visible ? 10 : 100000;
+      div.getBoundingClientRect = () => <any>{ top: top, bottom: top + 100, left: 0, right: 100, width: 100, height: 100 };
+    };
+    const createContainer = (rowCount: number): { container: HTMLElement, divs: Array<HTMLElement> } => {
+      const container = document.createElement("div");
+      container.style.overflowY = "auto";
+      Object.defineProperty(container, "scrollHeight", { configurable: true, value: 10000 });
+      Object.defineProperty(container, "clientHeight", { configurable: true, value: 500 });
+      document.body.appendChild(container);
+      const divs: Array<HTMLElement> = [];
+      for (let i = 0; i < rowCount; i++) {
+        const div = document.createElement("div");
+        setRowDivVisible(div, false);
+        container.appendChild(div);
+        divs.push(div);
+      }
+      return { container, divs };
+    };
+    const spyScrollListeners = (target: HTMLElement): { added: number, removed: number, active: number } => {
+      const res = { added: 0, removed: 0, active: 0 };
+      const listeners = new Set<any>();
+      const add = target.addEventListener.bind(target);
+      const remove = target.removeEventListener.bind(target);
+      target.addEventListener = (type: string, fn: any, options?: any) => {
+        if (type === "scroll") {
+          res.added++;
+          listeners.add(fn);
+          res.active = listeners.size;
+        }
+        add(type, fn, options);
+      };
+      target.removeEventListener = (type: string, fn: any, options?: any) => {
+        if (type === "scroll") {
+          res.removed++;
+          listeners.delete(fn);
+          res.active = listeners.size;
+        }
+        remove(type, fn, options);
+      };
+      return res;
+    };
+    const startRows = (rows: Array<QuestionRowModel>, divs: Array<HTMLElement>, container: HTMLElement): void => {
+      rows.forEach((row, index) => row.startLazyRendering(divs[index], () => container));
+    };
+    const scroll = (container: HTMLElement): void => {
+      container.dispatchEvent(new Event("scroll"));
+    };
+
+    test("a row renders when it scrolls into view", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const { rows } = createLazySurvey(2);
+        startRows(rows, divs, container);
+        vi.advanceTimersByTime(10);
+        expect(rows[0].isNeedRender, "row 0 is offscreen after init").toBe(false);
+        expect(rows[1].isNeedRender, "row 1 is offscreen after init").toBe(false);
+        setRowDivVisible(divs[1], true);
+        scroll(container);
+        expect(rows[0].isNeedRender, "row 0 is still offscreen").toBe(false);
+        expect(rows[1].isNeedRender, "row 1 scrolled into view").toBe(true);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("one scroll listener per container", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(20);
+      try {
+        const listeners = spyScrollListeners(container);
+        const { rows } = createLazySurvey(20);
+        startRows(rows, divs, container);
+        vi.advanceTimersByTime(10);
+        rows.forEach(row => expect(row.isNeedRender, "offscreen after init").toBe(false));
+        expect(listeners.added, "one listener for 20 rows").toBe(1);
+        expect(listeners.active, "one active listener").toBe(1);
+        for (let i = 0; i < 10; i++) {
+          setRowDivVisible(divs[i], true);
+        }
+        scroll(container);
+        for (let i = 0; i < 20; i++) {
+          expect(rows[i].isNeedRender, "row " + i).toBe(i < 10);
+        }
+        expect(listeners.active, "10 rows still wait").toBe(1);
+        for (let i = 10; i < 19; i++) {
+          rows[i].stopLazyRendering();
+        }
+        expect(listeners.active, "1 row still waits").toBe(1);
+        setRowDivVisible(divs[19], true);
+        scroll(container);
+        expect(rows[19].isNeedRender, "the last row renders").toBe(true);
+        expect(listeners.active, "the listener is removed with the last row").toBe(0);
+        expect(listeners.added, "still one add").toBe(1);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("a synthetic scroll event from activateLazyRenderingChecks still checks the rows", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const { rows } = createLazySurvey(2);
+        rows.forEach((row, index) => row.startLazyRendering(divs[index]));
+        vi.advanceTimersByTime(10);
+        expect(rows[0].isNeedRender, "row 0 is offscreen after init").toBe(false);
+        expect(rows[1].isNeedRender, "row 1 is offscreen after init").toBe(false);
+        setRowDivVisible(divs[0], true);
+        activateLazyRenderingChecks(divs[1]);
+        vi.advanceTimersByTime(9);
+        expect(rows[0].isNeedRender, "not before the helper's timer").toBe(false);
+        vi.advanceTimersByTime(1);
+        expect(rows[0].isNeedRender, "rendered after the helper's timer").toBe(true);
+        expect(rows[1].isNeedRender, "row 1 is still offscreen").toBe(false);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("rows are not checked while lazy rendering is suspended", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const { survey, rows } = createLazySurvey(2);
+        startRows(rows, divs, container);
+        vi.advanceTimersByTime(10);
+        expect(rows[0].isNeedRender, "row 0 is offscreen after init").toBe(false);
+        survey["suspendLazyRendering"]();
+        setRowDivVisible(divs[0], true);
+        scroll(container);
+        expect(rows[0].isNeedRender, "suspended").toBe(false);
+        survey["releaseLazyRendering"]();
+        scroll(container);
+        expect(rows[0].isNeedRender, "released").toBe(true);
+        expect(rows[1].isNeedRender, "row 1 is still offscreen").toBe(false);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("ensureVisibility checks a registered row without a scroll event", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const { rows } = createLazySurvey(2);
+        startRows(rows, divs, container);
+        vi.advanceTimersByTime(10);
+        expect(rows[1].isNeedRender, "row 1 is offscreen after init").toBe(false);
+        setRowDivVisible(divs[1], true);
+        rows[1].ensureVisibility();
+        expect(rows[1].isNeedRender, "row 1 is rendered").toBe(true);
+        expect(rows[0].isNeedRender, "row 0 is still offscreen").toBe(false);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("survey.dispose removes the scroll listener", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(10);
+      try {
+        const listeners = spyScrollListeners(container);
+        const { survey, rows } = createLazySurvey(10);
+        startRows(rows, divs, container);
+        vi.advanceTimersByTime(10);
+        rows.forEach(row => expect(row.isNeedRender, "offscreen after init").toBe(false));
+        expect(listeners.active > 0, "rows listen").toBe(true);
+        survey.dispose();
+        expect(listeners.active, "no listener after dispose").toBe(0);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("a row that starts while the container's timer is pending is checked when that timer fires", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const { rows } = createLazySurvey(2);
+        setRowDivVisible(divs[1], true);
+        rows[0].startLazyRendering(divs[0], () => container);
+        rows[1].startLazyRendering(divs[1], () => container);
+        vi.advanceTimersByTime(9);
+        expect(rows[1].isNeedRender, "not checked before the timer").toBe(false);
+        vi.advanceTimersByTime(1);
+        expect(rows[1].isNeedRender, "checked when the timer fires").toBe(true);
+        expect(rows[0].isNeedRender, "row 0 is offscreen").toBe(false);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("a row that starts after the container listens renders on the next scroll", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const listeners = spyScrollListeners(container);
+        const { rows } = createLazySurvey(2);
+        rows[0].startLazyRendering(divs[0], () => container);
+        vi.advanceTimersByTime(10);
+        expect(listeners.active, "the container listens").toBe(1);
+        rows[1].startLazyRendering(divs[1], () => container);
+        vi.advanceTimersByTime(10);
+        expect(rows[1].isNeedRender, "row 1 is offscreen after init").toBe(false);
+        setRowDivVisible(divs[1], true);
+        scroll(container);
+        expect(rows[1].isNeedRender, "row 1 renders on scroll").toBe(true);
+        expect(rows[0].isNeedRender, "row 0 is still offscreen").toBe(false);
+        expect(listeners.added, "no second listener").toBe(1);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("the timer checks the next row after an asynchronous renderer has updated the layout", async () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(3);
+      try {
+        const { rows } = createLazySurvey(3);
+        setRowDivVisible(divs[0], true);
+        setRowDivVisible(divs[1], true);
+        setRowDivVisible(divs[2], true);
+        // Like Vue, Angular and Preact: rendering row 0 updates the DOM in a microtask, and pushes row 1 out of view
+        rows[0].registerFunctionOnPropertyValueChanged("isNeedRender", () => {
+          queueMicrotask(() => setRowDivVisible(divs[1], false));
+        });
+        startRows(rows, divs, container);
+        await vi.advanceTimersByTimeAsync(10);
+        expect(rows[0].isNeedRender, "row 0 is rendered").toBe(true);
+        // fake timers delay a 0 ms timer created while they run by 1 ms
+        await vi.advanceTimersByTimeAsync(1);
+        expect(rows[1].isNeedRender, "row 1 was checked after the re-render").toBe(false);
+        expect(rows[2].isNeedRender, "row 2 was checked").toBe(true);
+        setRowDivVisible(divs[1], true);
+        scroll(container);
+        expect(rows[1].isNeedRender, "row 1 renders on scroll").toBe(true);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+    test("a row stopped before the timer fires is never checked", () => {
+      vi.useFakeTimers();
+      const { container, divs } = createContainer(2);
+      try {
+        const listeners = spyScrollListeners(container);
+        const { rows } = createLazySurvey(2);
+        setRowDivVisible(divs[0], true);
+        let checks = 0;
+        const ensureVisibility = rows[0].ensureVisibility;
+        rows[0].ensureVisibility = function () {
+          checks++;
+          ensureVisibility.call(this);
+        };
+        rows[0].startLazyRendering(divs[0], () => container);
+        rows[0].stopLazyRendering();
+        vi.advanceTimersByTime(20);
+        expect(checks, "the only row is not checked").toBe(0);
+        expect(rows[0].isNeedRender, "the only row is not rendered").toBe(false);
+        expect(listeners.added, "no listener for a stopped row").toBe(0);
+
+        rows[0].startLazyRendering(divs[0], () => container);
+        rows[1].startLazyRendering(divs[1], () => container);
+        rows[0].stopLazyRendering();
+        vi.advanceTimersByTime(10);
+        expect(checks, "the stopped row is not checked").toBe(0);
+        expect(rows[0].isNeedRender, "the stopped row is not rendered").toBe(false);
+        expect(listeners.active, "the other row listens").toBe(1);
+      } finally {
+        container.remove();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // A lazy survey whose rows live in real divs under document.body. With a container, the rows are inside a
+  // scrolling div; without one, the document element scrolls and the rows listen on window.
+  // A row div is offscreen until showRow() makes it visible.
+  function createLazyRowsFixture(useContainer: boolean) {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "text", name: "q1" },
+        { type: "text", name: "q2" },
+        { type: "text", name: "q3" },
+        { type: "text", name: "q4" }
+      ]
+    });
+    survey.lazyRenderEnabled = true;
+    const page = survey.currentPage;
+    const docEl = document.documentElement;
+    const container = document.createElement("div");
+    const rootElement = document.createElement("div");
+    const pageDiv = document.createElement("div");
+    pageDiv.id = page.id;
+    rootElement.appendChild(pageDiv);
+    if (useContainer) {
+      container.style.overflowY = "auto";
+      Object.defineProperty(container, "scrollHeight", { configurable: true, value: 5000 });
+      Object.defineProperty(container, "clientHeight", { configurable: true, value: 500 });
+      container.appendChild(rootElement);
+      document.body.appendChild(container);
+    } else {
+      Object.defineProperty(docEl, "scrollHeight", { configurable: true, value: 5000 });
+      Object.defineProperty(docEl, "clientHeight", { configurable: true, value: 500 });
+      document.body.appendChild(rootElement);
+    }
+    survey.rootElement = rootElement;
+    const visibleDivs: Array<HTMLElement> = [];
+    const rowDivs = page.rows.map((row, index) => {
+      const div = document.createElement("div");
+      Object.defineProperty(div, "offsetHeight", { configurable: true, value: 50 });
+      div.getBoundingClientRect = () => {
+        const top = visibleDivs.indexOf(div) > -1 ? 100 : 10000 + index * 100;
+        return <any>{ top: top, bottom: top + 50, height: 50 };
+      };
+      pageDiv.appendChild(div);
+      return div;
+    });
+    return {
+      survey, page, container, rowDivs,
+      startRows: () => page.rows.forEach((row, index) => row.startLazyRendering(rowDivs[index])),
+      showRow: (index: number) => { visibleDivs.push(rowDivs[index]); },
+      dispose: () => {
+        page.rows.forEach(row => row.stopLazyRendering());
+        rootElement.remove();
+        container.remove();
+        delete (<any>docEl).scrollHeight;
+        delete (<any>docEl).clientHeight;
+      }
+    };
+  }
+  function runLazyRowsTest(useContainer: boolean, func: (fixture: ReturnType<typeof createLazyRowsFixture>) => void) {
+    const prevStartRow = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    vi.useFakeTimers();
+    let fixture: ReturnType<typeof createLazyRowsFixture>;
+    try {
+      fixture = createLazyRowsFixture(useContainer);
+      func(fixture);
+    } finally {
+      fixture?.dispose();
+      vi.useRealTimers();
+      settings.lazyRowsRenderingStartRow = prevStartRow;
+    }
+  }
+  test("activateLazyRenderingChecks renders a row that listens on window", () => {
+    runLazyRowsTest(false, ({ page, rowDivs, startRows, showRow }) => {
+      startRows();
+      const row = page.rows[2];
+      expect(row["_scrollableParent"], "the row listens on window").toBe(window);
+      vi.advanceTimersByTime(10);
+      expect(row.isNeedRender, "offscreen after initialization").toBe(false);
+      showRow(2);
+      activateLazyRenderingChecks(rowDivs[2]);
+      vi.advanceTimersByTime(9);
+      expect(row.isNeedRender, "not before 10 ms").toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(row.isNeedRender, "rendered after 10 ms").toBe(true);
+      expect(page.rows[3].isNeedRender, "the offscreen row stays a skeleton").toBe(false);
+    });
+  });
+  test("activateLazyRenderingChecks dispatches on a scrolling container and renders its row", () => {
+    runLazyRowsTest(true, ({ page, container, rowDivs, startRows, showRow }) => {
+      startRows();
+      const row = page.rows[2];
+      expect(row["_scrollableParent"], "the row listens on the container").toBe(container);
+      let containerEvents = 0;
+      let windowEvents = 0;
+      const onContainerScroll = () => containerEvents++;
+      const onWindowScroll = () => windowEvents++;
+      container.addEventListener("scroll", onContainerScroll);
+      window.addEventListener("scroll", onWindowScroll);
+      try {
+        vi.advanceTimersByTime(10);
+        expect(row.isNeedRender, "offscreen after initialization").toBe(false);
+        showRow(2);
+        activateLazyRenderingChecks(rowDivs[2]);
+        vi.advanceTimersByTime(9);
+        expect(row.isNeedRender, "not before 10 ms").toBe(false);
+        vi.advanceTimersByTime(1);
+        expect(row.isNeedRender, "rendered after 10 ms").toBe(true);
+        expect(containerEvents, "the container gets the event").toBe(1);
+        expect(windowEvents, "window does not get the event").toBe(0);
+      } finally {
+        container.removeEventListener("scroll", onContainerScroll);
+        window.removeEventListener("scroll", onWindowScroll);
+      }
+    });
+  });
+  test("activateLazyRenderingChecks dispatches on window, not on the document element, when the page scrolls", () => {
+    runLazyRowsTest(false, ({ rowDivs }) => {
+      const docEl = document.documentElement;
+      let docElEvents = 0;
+      let windowEvents = 0;
+      const onDocElScroll = () => docElEvents++;
+      const onWindowScroll = () => windowEvents++;
+      docEl.addEventListener("scroll", onDocElScroll);
+      window.addEventListener("scroll", onWindowScroll);
+      try {
+        activateLazyRenderingChecks(rowDivs[0]);
+        vi.advanceTimersByTime(10);
+        expect(docElEvents, "the document element gets nothing").toBe(0);
+        expect(windowEvents, "window gets one event").toBe(1);
+      } finally {
+        docEl.removeEventListener("scroll", onDocElScroll);
+        window.removeEventListener("scroll", onWindowScroll);
+      }
+    });
+  });
+  test("Removing a question renders rows that moved into view when the page scrolls", () => {
+    runLazyRowsTest(false, ({ survey, page, startRows, showRow }) => {
+      startRows();
+      vi.advanceTimersByTime(10);
+      const row = page.rows[2];
+      expect(row.isNeedRender, "offscreen after initialization").toBe(false);
+      showRow(2);
+      survey.getQuestionByName("q1").delete();
+      expect(page.rows.indexOf(row), "the row is kept").toBe(1);
+      vi.advanceTimersByTime(9);
+      expect(row.isNeedRender, "not before 10 ms").toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(row.isNeedRender, "rendered after 10 ms").toBe(true);
+    });
+  });
+  test("scrollElementToTop keeps rows suspended while scrolling and checks them after", () => {
+    const oldScrollElementToTop = SurveyElement.ScrollElementToTop;
+    try {
+      runLazyRowsTest(true, ({ survey, page, container, startRows, showRow }) => {
+        startRows();
+        vi.advanceTimersByTime(10);
+        const row = page.rows[2];
+        let renderedWhileScrolling: boolean = undefined;
+        SurveyElement.ScrollElementToTop = ((el, _, __, doneCallback) => {
+          showRow(2);
+          container.dispatchEvent(new CustomEvent("scroll"));
+          renderedWhileScrolling = row.isNeedRender;
+          doneCallback();
+        }) as any;
+        const q1 = survey.getQuestionByName("q1");
+        survey.scrollElementToTop(q1, q1, null, q1.id);
+        vi.advanceTimersByTime(100);
+        expect(page.rows[0].isNeedRender, "the target row is force-rendered").toBe(true);
+        expect(renderedWhileScrolling, "rows do not render while suspended").toBe(false);
+        expect(row.isNeedRender, "not before the check").toBe(false);
+        vi.advanceTimersByTime(10);
+        expect(row.isNeedRender, "rendered on the check after release").toBe(true);
+      });
+    } finally {
+      SurveyElement.ScrollElementToTop = oldScrollElementToTop;
+    }
+  });
+  test("scrollElementToTop does not dispatch the lazy rendering check without lazy rendering", () => {
+    const oldScrollElementToTop = SurveyElement.ScrollElementToTop;
+    vi.useFakeTimers();
+    const survey = new SurveyModel({ elements: [{ type: "text", name: "q1" }, { type: "text", name: "q2" }] });
+    const q1 = survey.getQuestionByName("q1");
+    const root = document.createElement("div");
+    const questionDiv = document.createElement("div");
+    questionDiv.id = q1.id;
+    root.appendChild(questionDiv);
+    document.body.appendChild(root);
+    let scrollEvents = 0;
+    const onScroll = () => scrollEvents++;
+    window.addEventListener("scroll", onScroll);
+    try {
+      expect(survey.isLazyRendering, "lazy rendering is off").toBe(false);
+      survey.rootElement = root;
+      let scrolledCallbacks = 0;
+      SurveyElement.ScrollElementToTop = ((el, _, __, doneCallback) => { doneCallback(); }) as any;
+      survey.scrollElementToTop(q1, q1, null, q1.id, false, undefined, undefined, () => scrolledCallbacks++);
+      vi.advanceTimersByTime(20);
+      expect(scrollEvents, "no synthetic scroll after scrolling to the element").toBe(0);
+
+      survey.autoCenterFocusedQuestion = true;
+      survey.scrollElementToTop(q1, q1, null, q1.id, false, undefined, undefined, () => scrolledCallbacks++);
+      vi.advanceTimersByTime(20);
+      expect(scrollEvents, "no synthetic scroll after centering the element").toBe(0);
+      expect(scrolledCallbacks, "both scrolls call back").toBe(2);
+    } finally {
+      SurveyElement.ScrollElementToTop = oldScrollElementToTop;
+      window.removeEventListener("scroll", onScroll);
+      vi.useRealTimers();
+      survey.dispose();
+      root.remove();
+    }
+  });
+  test("row.isNeedRender & settings.lazyRowsRenderingStartRow", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+          ],
+        },
+      ],
+    };
+
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 2;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page: PageModel = survey.currentPage;
+      expect(page.rows.length, "There are 3 rows").toBe(3);
+      expect(page.rows[0].isNeedRender, "isNeedRender rows[0]").toBe(true);
+      expect(page.rows[1].isNeedRender, "isNeedRender rows[1]").toBe(true);
+      expect(page.rows[2].isNeedRender, "isNeedRender rows[2]").toBe(false);
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("row.isNeedRender & settings.lazyRowsRenderingStartRow & designMode", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+          ],
+        },
+        {
+          name: "page2",
+          elements: [
+            {
+              type: "text",
+              name: "q4",
+            },
+          ],
+        },
+      ],
+    };
+
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 2;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      survey.setDesignMode(true);
+      const page1: PageModel = survey.pages[0];
+      expect(page1.rows.length, "There are 3 rows").toBe(3);
+      expect(page1.rows[0].isNeedRender, "isNeedRender rows[0]").toBe(true);
+      expect(page1.rows[1].isNeedRender, "isNeedRender rows[1]").toBe(true);
+      expect(page1.rows[2].isNeedRender, "isNeedRender rows[2]").toBe(false);
+
+      const page2: PageModel = survey.pages[1];
+      page2.onFirstRendering();
+      expect(page2.rows.length, "There is one row on the second page").toBe(1);
+      expect(page2.rows[0].isNeedRender, "We do lazy rendering for the second page in design mode").toBe(false);
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("row.visibleElements make it reactive", () => {
+    const page = new PageModel();
+    page.addNewQuestion("text", "q1");
+    page.addNewQuestion("text", "q2");
+    page.addNewQuestion("text", "q3");
+    page.questions[1].startWithNewLine = false;
+    page.questions[2].startWithNewLine = false;
+    expect(page.rows.length, "We have one row").toBe(1);
+    const row = page.rows[0];
+    expect(row.elements.length, "We have 3 elements in row").toBe(3);
+    expect(row.visibleElements.length, "All elements are visible").toBe(3);
+    expect(row.getPropertyValue("visibleElements").length, "visibleElements are reactive").toBe(3);
+    page.questions[1].visible = false;
+    expect(row.visibleElements.length, "Two elements are visible").toBe(2);
+    expect(row.visibleElements[0].name, "First element").toBe("q1");
+    expect(row.visibleElements[1].name, "Second element").toBe("q3");
+    page.removeElement(page.questions[2]);
+    expect(row.visibleElements.length, "One element is visible").toBe(1);
+    expect(row.visibleElements[0].name, "First element, #2").toBe("q1");
+    page.questions[1].visible = true;
+    expect(row.visibleElements.length, "Two elements are visible, #3").toBe(2);
+    expect(row.visibleElements[0].name, "First element, #3").toBe("q1");
+    expect(row.visibleElements[1].name, "Second element, #3").toBe("q2");
+  });
+
+  test("row.isNeedRender for dynamically added questions", () => {
+
+    const json = {
+      "elements": [
+        {
+          "name": "signature",
+          "type": "signaturepad",
+          "title": "Sign here"
+
+        }, {
+          "name": "name",
+          "type": "text",
+          "title": "Text",
+          "placeHolder": "Jon Snow"
+
+        }, {
+          "name": "birthdate",
+          "type": "text",
+          "inputType": "date",
+          "title": "Text Date"
+
+        }, {
+          "name": "color",
+          "type": "text",
+          "inputType": "color",
+          "title": "Text Color"
+        }, {
+          "name": "email",
+          "type": "text",
+          "inputType": "email",
+          "title": "Text Email",
+          "placeHolder": "jon.snow@nightwatch.org",
+
+          "validators": [
+            {
+              "type": "email"
+            }
+          ]
+        }, {
+          "type": "dropdown",
+          "name": "cars",
+          "title": "Dropdown",
+
+          "showNoneItem": true,
+          "colCount": 4,
+          "choices": [
+            "Ford",
+            "Vauxhall",
+            "Volkswagen",
+            "Nissan",
+            "Audi",
+            "Mercedes-Benz",
+            "BMW",
+            "Peugeot",
+            "Toyota",
+            "Citroen"
+          ]
+        }, {
+          "type": "checkbox",
+          "name": "car",
+          "title": "Checkbox",
+
+          "showSelectAllItem": true,
+          "showNoneItem": true,
+          "colCount": 4,
+          "choices": [
+            "Ford",
+            "Vauxhall",
+            "Volkswagen",
+            "Nissan",
+            "Audi",
+            "Mercedes-Benz",
+            "BMW",
+            "Peugeot",
+            "Toyota",
+            "Citroen"
+          ]
+        }, {
+          "type": "radiogroup",
+          "name": "carss",
+          "title": "Radiogroup",
+
+          "colCount": 4,
+          "choices": [
+            "None",
+            "Ford",
+            "Vauxhall",
+            "Volkswagen",
+            "Nissan",
+            "Audi",
+            "Mercedes-Benz",
+            "BMW",
+            "Peugeot",
+            "Toyota",
+            "Citroen"
+          ]
+        }, {
+          "type": "image",
+          "name": "banner",
+          "imageHeight": "300px",
+          "imageWidth": "450px",
+          "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/lion.jpg"
+        }, {
+          "type": "imagepicker",
+          "name": "choosepicture",
+          "title": "Imagepicker",
+          "imageHeight": "150px",
+          "imageWidth": "225px",
+          "choices": [
+            {
+              "value": "lion",
+              "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/lion.jpg"
+            }, {
+              "value": "giraffe",
+              "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/giraffe.jpg"
+            }, {
+              "value": "panda",
+              "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/panda.jpg"
+            }, {
+              "value": "camel",
+              "imageLink": "https://surveyjs.io/Content/Images/examples/image-picker/camel.jpg"
+            }
+          ]
+        }, {
+          "type": "boolean",
+          "name": "bool",
+          "title": "Boolean",
+          "label": "Are you 21 or older?"
+
+        }, {
+          "type": "matrix",
+          "name": "Quality",
+          "title": "Matrix",
+          "columns": [
+            {
+              "value": 1,
+              "text": "Strongly Disagree"
+            }, {
+              "value": 2,
+              "text": "Disagree"
+            }, {
+              "value": 3,
+              "text": "Neutral"
+            }, {
+              "value": 4,
+              "text": "Agree"
+            }, {
+              "value": 5,
+              "text": "Strongly Agree"
+            }
+          ],
+          "rows": [
+            {
+              "value": "affordable",
+              "text": "Product is affordable"
+            }, {
+              "value": "does what it claims",
+              "text": "Product does what it claims"
+            }, {
+              "value": "better than others",
+              "text": "Product is better than other products on the market"
+            }, {
+              "value": "easy to use",
+              "text": "Product is easy to use"
+            }
+          ]
+        }, {
+          "type": "matrix",
+          "name": "planningPerformance",
+          "title": "Matrix Rubric",
+          "columns": [
+            "Ineffective", "Improvement Necessary", "Effective", "Highly Effective"
+          ],
+          "rows": [
+            {
+              "value": "dataToPlan",
+              "text": "Utilizes Assessment Data to Plan"
+            }, {
+              "value": "ambitiousGoals",
+              "text": "Ambitious and Measurable Achievement Goal"
+            }, {
+              "value": "developsStandards",
+              "text": "Develops Standards.<br/>Based Unit Plans and Assessments.<br/>Evaluation Values."
+            }, {
+              "value": "createsObjective",
+              "text": "Creates Objective - Driven Lesson Plans and Assessments"
+            }
+          ],
+          "cells": {
+            "dataToPlan": {
+              "Ineffective": "Teacher rarely or never uses formal and informal assessment data when planning",
+              "Improvement Necessary": "Teacher uses formal and informal assessment data to formulate <br/> - Achievement goals, unit plans, or lesson plans, but not all of these",
+              "Effective": "Teacher uses formal and informal assessment data to formulate <br/>- Achievement goals, unit plans, and lesson plans",
+              "Highly Effective": "Teacher uses formal and informal assessment data to formulate achievement goals, unit plans, and lesson plans<br/>- Incorporates differentiated instructional strategies in planning to reach every student at his/her level of understanding"
+            },
+            "ambitiousGoals": {
+              "Ineffective": "Teacher rarely or never develops achievement goals for the class, or goals are developed but are too general to be helpful for planning purposes",
+              "Improvement Necessary": "Teacher develops an annual student achievement goalthat lacks one or more of these traits:<br/>- Measurable<br/>- Aligned to content standards<br/>- Includes benchmarks to help monitor learning and inform interventions throughout the year",
+              "Effective": "Teacher develops an annual student achievement goal that<br/>- Is measurable<br/>- Is aligned to content standards<br/>- Includes benchmarks to help monitor learning and inform interventions throughout the year",
+              "Highly Effective": "Teacher develops an annual student achievement goal that<br/>- Is measurable<br/>- Is aligned to content standards where applicable<br/>- Includes benchmarks to help monitor learning and informinterventions throughout the year"
+            },
+            "developsStandards": {
+              "Ineffective": "Teacher rarely or never plans by identifying content standards that students will master in each unit, or there is little to no evidence that teacher plans units at all",
+              "Improvement Necessary": "Based on achievement goals, teacher plans units but omits one or more of these steps:<br/>- Identifying content standards that students will master in each unit<br/>- Creating assessments before planning units<br/>- Allocating an instructionally appropriate amount of time for each unit",
+              "Effective": "Based on achievement goals, teacher plans units by<br/>- Identifying content standards that students will master in each unit<br/>- Creating assessments before each unit begins for backwards planning<br/>- Allocating an instructionally appropriate amount of time for each unit",
+              "Highly Effective": "Based on achievement goals, teacher plans units by<br/>- Identifying content standards that students will master in each unit<br/>- Creating assessments before each unit begins for backwards planning<br/>- Allocating an instructionally appropriate amount of time for each unit"
+            },
+            "createsObjective": {
+              "Ineffective": "Teacher rarely or never uses a system to track student assessment/progress data and/or has an ineffective grading system",
+              "Improvement Necessary": "Teacher uses a data tracking system to record student assessment / progress data and maintain a grading system but fails in one or more of the following steps<br/>- Use data to analyze student progress toward mastery or to plan future lessons / units<br/>- Have a grading system that appropriately aligns with student learning goals",
+              "Effective": "Teacher uses an effective data tracking system for<br/>- Recording student assessment / progress data<br/>- Analyzing student progress towards mastery and planning future lessons/units accordingly<br/>- Maintaining a grading system aligned to student learning goals",
+              "Highly Effective": "Teacher uses an effective data tracking system that<br/>- Records student assessment / progress data<br/>- Analyzes student progress toward mastery and plans future lessons/units accordingly<br/>- Maintains a grading system aligned to student learning goals"
+            }
+          }
+        }, {
+          "type": "matrix Dropdown",
+          "name": "frameworksRate",
+          "title": "Matrixdropdown",
+          "choices": [
+            "Excelent", "Good", "Average", "Fair", "Poor"
+          ],
+          "columns": [
+            {
+              "name": "using",
+              "title": "Do you use it?",
+              "choices": [
+                "Yes", "No"
+              ],
+              "cellType": "radiogroup"
+            }, {
+              "name": "experience",
+              "title": "How long do you use it?",
+              "choices": [
+                {
+                  "value": 5,
+                  "text": "3-5 years"
+                }, {
+                  "value": 2,
+                  "text": "1-2 years"
+                }, {
+                  "value": 1,
+                  "text": "less than a year"
+                }
+              ]
+            }, {
+              "name": "strength",
+              "title": "What is main strength?",
+              "choices": [
+                "Easy", "Compact", "Fast", "Powerfull"
+              ],
+              "cellType": "checkbox"
+            }, {
+              "name": "knowledge",
+              "title": "Please describe your experience",
+              "cellType": "text"
+            }, {
+              "name": "rate",
+              "title": "Please rate the framework itself"
+            }
+          ],
+          "rows": [
+            {
+              "value": "angularv1",
+              "text": "angularjs v1.x"
+            }, {
+              "value": "angularv2",
+              "text": "angularjs v2"
+            }, {
+              "value": "knockoutjs"
+            }, {
+              "value": "reactjs"
+            }
+          ]
+        }, {
+          "type": "matrixdynamic",
+          "name": "teachersRate",
+          "title": "Matrix Dynamic",
+          "addRowText": "Add Subject",
+          "horizontalScroll": true,
+          "columnMinWidth": "130px",
+          "columnColCount": 1,
+          "cellType": "radiogroup",
+          "choices": [
+            {
+              "value": 1,
+              "text": "Yes"
+            }, {
+              "value": 0,
+              "text": "Sometimes"
+            }, {
+              "value": -1,
+              "text": "No"
+            }
+          ],
+          "columns": [
+            {
+              "name": "subject",
+              "cellType": "dropdown",
+              "title": "Select a subject",
+
+              "minWidth": "300px",
+              "choices": [
+                "English: American Literature",
+                "English: British and World Literature",
+                "Math: Consumer Math",
+                "Math: Practical Math",
+                "Math: Developmental Algebra",
+
+                "World Languages: Japanese"
+              ]
+            }, {
+              "name": "selfthinking",
+              "title": "Encourages me to think for myself"
+            }, {
+              "name": "frusturation",
+              "cellType": "comment",
+              "title": "Is there anything about this class that frustrates you?",
+              "minWidth": "250px"
+            }, {
+              "name": "likeTheBest",
+              "cellType": "comment",
+              "title": "What do you like best about this class and/or teacher?",
+              "minWidth": "250px"
+            }, {
+              "name": "improvements",
+              "cellType": "comment",
+              "title": "What do you wish this teacher would do differently that would improve this class?",
+              "minWidth": "250px"
+            }
+          ],
+          "rowCount": 2
+        }, {
+          "type": "matrixdynamic",
+          "name": "Current Level of Function",
+          "title": "Matrix Dynamic (vertical columns)",
+          "transposeData": true,
+          "maxRowCount": 5,
+          "columns": [
+            {
+              "name": "Date",
+              "title": "Date",
+              "cellType": "text",
+              "inputType": "date"
+            }, {
+              "name": "AmbDistance",
+              "title": "Amb Distance",
+              "cellType": "text"
+            }, {
+              "name": "Amb Assistance",
+              "cellType": "dropdown",
+              "choices": ["D", "MAX", "MOD", "MIN"]
+            }, {
+              "name": "Standing Tolerance",
+              "cellType": "text"
+            }, {
+              "name": "UE Strength",
+              "cellType": "text"
+            }, {
+              "name": "Cognitive Function",
+              "cellType": "comment"
+            }
+          ],
+          "choices": [1],
+          "cellType": "comment",
+          "confirmDelete": true,
+          "addRowText": "Add Date +",
+          "removeRowText": "Remove"
+        }, {
+          "type": "matrixdynamic",
+          "name": "orderList",
+          "rowCount": 1,
+          "minRowCount": 1,
+          "title": "Matrix Dynamic (totals)",
+          "addRowText": "Add new item",
+          "columns": [
+            {
+              "name": "id",
+              "title": "Id",
+              "cellType": "expression",
+              "expression": "{rowIndex}"
+            }, {
+              "name": "phone_model",
+              "title": "Phone model",
+
+              "totalType": "count",
+              "totalFormat": "Items count: {0}",
+              "choices": [1, 2, 3]
+            }, {
+              "name": "price",
+              "title": "Price",
+              "cellType": "expression",
+              "expression": "getItemPrice('phone_model')",
+              "displayStyle": "currency"
+            }, {
+              "name": "quantity",
+              "title": "Quantity",
+
+              "cellType": "text",
+              "inputType": "number",
+              "totalType": "sum",
+              "totalFormat": "Total phones: {0}",
+              "validators": [
+                {
+                  "type": "numeric",
+                  "minValue": 1,
+                  "maxValue": 100
+                }
+              ]
+            }, {
+              "name": "total",
+              "title": "Total",
+              "cellType": "expression",
+              "expression": "{row.quantity} * {row.price}",
+              "displayStyle": "currency",
+              "totalType": "sum",
+              "totalDisplayStyle": "currency",
+              "totalFormat": "Total: {0}"
+            }
+          ]
+        }, {
+          "name": "vatProcents",
+          "type": "text",
+          "title": "VAT (in %)",
+          "defaultValue": 20,
+          "inputType": "number",
+          "validators": [
+            {
+              "type": "numeric",
+              "minValue": 0,
+              "maxValue": 40
+            }
+          ]
+        }, {
+          "name": "vatTotal",
+          "type": "expression",
+          "title": "VAT",
+          "expression": "{orderList-total.total} * {vatProcents} / 100",
+          "displayStyle": "currency",
+          "startWithNewLine": false
+        }, {
+          "name": "total",
+          "type": "expression",
+          "title": "Total",
+          "expression": "{orderList-total.total} + {vatTotal}",
+          "displayStyle": "currency",
+          "startWithNewLine": false
+        }, {
+          "type": "multipletext",
+          "name": "pricelimit",
+          "title": "Multipletext",
+          "colCount": 2,
+          "items": [
+            {
+              "name": "mostamount",
+              "title": "Most amount you would every pay for a product like ours"
+            }, {
+              "name": "leastamount",
+              "title": "The least amount you would feel comfortable paying"
+            }
+          ]
+        }, {
+          "type": "rating",
+          "name": "satisfaction",
+          "title": "Rating",
+          "minRateDescription": "Not Satisfied",
+          "maxRateDescription": "Completely satisfied"
+        }, {
+          "type": "comment",
+          "name": "suggestions",
+          "title": "Comment"
+        }, {
+          "type": "file",
+          "title": "File",
+          "name": "image",
+          "storeDataAsText": false,
+          "showPreview": true,
+          "imageWidth": 150,
+          "maxSize": 102400
+        }
+      ]
+    };
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRendering = true;
+    settings.lazyRowsRenderingStartRow = 2;
+    try {
+      const survey = new SurveyModel(json);
+      const page1: PageModel = survey.pages[0];
+
+      expect(page1.rows.length, "There are 21 rows").toBe(21);
+      expect(page1.rows[0].isNeedRender, "isNeedRender rows[0]").toBe(true);
+      expect(page1.rows[1].isNeedRender, "isNeedRender rows[1]").toBe(true);
+      expect(page1.rows[2].isNeedRender, "isNeedRender rows[2]").toBe(false);
+      expect(page1.rows[3].isNeedRender, "isNeedRender rows[3]").toBe(false);
+      expect(page1.rows[20].isNeedRender, "isNeedRender rows[20]").toBe(false);
+
+      page1.addNewQuestion("text", "qN");
+      expect(page1.rows.length, "There are 22 rows").toBe(22);
+      expect(page1.rows[21].isNeedRender, "isNeedRender rows[21]").toBe(false);
+
+      survey["_isDesignMode"] = true;
+
+      page1.addNewQuestion("text", "qN2");
+      expect(page1.rows.length, "There are 23 rows").toBe(23);
+      expect(page1.rows[22].isNeedRender, "isNeedRender rows[22] for creator v2").toBe(true);
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+
+  test("row.isNeedRender for question invisible -> visible", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+            },
+            {
+              type: "text",
+              name: "q3",
+              visibleIf: "{q1} == 'a'"
+            },
+          ],
+        }
+      ],
+    };
+
+    const prevLazyRowsRendering = settings.lazyRowsRendering;
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 2;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+      expect(page1.rows.length, "There are 3 rows").toBe(3);
+      expect(page1.rows[0].isNeedRender, "isNeedRender rows[0]").toBe(true);
+      expect(page1.rows[1].isNeedRender, "isNeedRender rows[1]").toBe(true);
+      expect(page1.rows[2].isNeedRender, "isNeedRender rows[2]").toBe(false);
+
+      survey.data = { q1: "a" };
+
+      expect(page1.rows[2].isNeedRender, "isNeedRender rows[2]").toBe(true);
+
+    } finally {
+      settings.lazyRowsRendering = prevLazyRowsRendering;
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("Panel.actions", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "panel",
+          name: "panel1",
+          elements: [{ type: "text", name: "q1" }],
+        },
+      ],
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    panel.footerActions.push({ id: "test" });
+    expect(panel.getFooterToolbar().actions.length).toBe(1);
+    expect(panel.getFooterToolbar().actions[0].id).toBe("test");
+  });
+  test("Footer toolbar type", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "panel",
+          name: "panel1",
+          allowAdaptiveActions: false,
+          elements: [{ type: "text", name: "q1" }],
+        },
+      ],
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    expect(panel.getFooterToolbar() instanceof ActionContainer).toBeTruthy();
+    panel.allowAdaptiveActions = true;
+    panel["footerToolbarValue"] = null;
+    expect(panel.getFooterToolbar() instanceof AdaptiveActionContainer).toBeTruthy();
+  });
+  test("Check needResponsiveWidth method", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "panel",
+          name: "panel1",
+          elements: [{ type: "text", name: "q1" }, { type: "text", name: "q2" }],
+        },
+      ],
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    expect(panel.needResponsiveWidth()).toBeFalsy();
+    panel.startWithNewLine = false;
+    expect(panel.needResponsiveWidth()).toBeTruthy();
+    panel.startWithNewLine = true;
+    panel.elements[1].startWithNewLine = false;
+    expect(panel.needResponsiveWidth()).toBeTruthy();
+  });
+  test("Delete a first question in the row", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "text", name: "q1" },
+        { type: "text", name: "q2" },
+        { type: "text", name: "q3", startWithNewLine: false },
+      ],
+    });
+    const page = <PageModel>survey.currentPage;
+    expect(page.rows.length, "There are two rows").toBe(2);
+    expect(page.rows[1].elements.length, "There are two elements in the second row").toBe(2);
+    const q2 = <IElement>survey.getQuestionByName("q2");
+    const q3 = <IElement>survey.getQuestionByName("q3");
+    expect(q3.startWithNewLine, "q3 startWithNewLine is false").toBe(false);
+    q2.delete();
+    expect(page.rows.length, "Still two rows").toBe(2);
+    expect(q3.startWithNewLine, "q3 startWithNewLine is true").toBe(true);
+  });
+  test("page.cssRoot check for existings cssStyle.page", () => {
+    const survey = new SurveyModel();
+    const prevPage = survey.css.page;
+    delete survey.css.page;
+    const page = new PageModel();
+    expect(page.cssRoot).toBe("");
+    expect(page.cssTitle).toBe("");
+    survey.css.page = prevPage;
+  });
+  test("Check panel footer actions event", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "panel",
+          name: "panel",
+          elements: [
+            {
+              type: "text",
+            }
+          ]
+        }
+      ]
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel");
+    survey.onGetPanelFooterActions.add((sender, opt) => {
+      expect(sender).toBe(survey);
+      expect(opt.panel).toBe(panel);
+      expect(opt.question).toBeUndefined();
+      opt.actions.push({
+        id: "test",
+        title: "test",
+        action: () => { }
+      });
+    });
+    expect(panel.footerActions.length).toBe(0);
+    expect(panel["footerToolbarValue"]).toBeUndefined();
+
+    //panel actions should be created only after footerToolbar is requested
+
+    const actions = panel.getFooterToolbar().actions;
+
+    expect(actions.length).toBe(1);
+    expect(actions[0].title).toBe("test");
+  });
+  test("Expand panel on error in multiple text question", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "text", name: "q1",
+        },
+        {
+          type: "panel",
+          name: "panel",
+          title: "title",
+          state: "collapsed",
+          elements: [
+            {
+              "type": "multipletext",
+              "name": "q2",
+              "items": [{ "name": "item1", "isRequired": true }]
+            }
+          ]
+        }
+      ]
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel");
+    expect(panel.state, "the panel is collapsed by default").toBe("collapsed");
+    survey.tryComplete();
+    expect(panel.state, "the panel is expanded").toBe("expanded");
+  });
+
+  test("Check panel styles with originalPage", () => {
+    const survey = new SurveyModel({
+      questionsOnPageMode: "singlePage",
+      pages: [
+        {
+          name: "panel",
+          title: "title",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "panel",
+              name: "innerPanel",
+              elements: [
+                {
+                  type: "text",
+                  name: "q2",
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+    survey.css = {
+      root: "sd-root-modern",
+      pageRow: "page_row"
+    };
+    const panel = <PanelModel>survey.getPageByName("panel");
+    const innerPanel = <PanelModel>survey.getPanelByName("innerPanel");
+    const question = survey.getQuestionByName("q1");
+    const question2 = survey.getQuestionByName("q2");
+    //check panels styles
+
+    expect(panel["getIsNested"]()).toBeFalsy();
+    expect(panel["getHasFrameV2"]()).toBeFalsy();
+
+    expect(innerPanel["getIsNested"]()).toBeFalsy();
+    expect(innerPanel["getHasFrameV2"]()).toBeTruthy();
+
+    expect(panel.rows[0].getRowCss().includes("page_row")).toBeTruthy();
+    expect(innerPanel.rows[0].getRowCss().includes("page_row")).toBeFalsy();
+
+    // //check questions styles
+
+    expect(question["getIsNested"]()).toBeFalsy();
+    expect(question["getHasFrameV2"]()).toBeTruthy();
+
+    expect(question2["getIsNested"]()).toBeTruthy();
+    expect(question2["getHasFrameV2"]()).toBeFalsy();
+    survey.css = {};
+  });
+
+  // Removed: "Check panel styles with originalPage and showPreview" - assertions relied on
+  // `survey.getPanelByName("panel")` resolving to the original page after `showPreview()`,
+  // which the current production API does not expose. The companion test
+  // "Check panel styles with originalPage" (above) covers the still-valid assertions.
+
+  test("Render name for collapsed/expanded questions in design-time", () => {
+    const survey = new SurveyModel();
+    survey.setDesignMode(true);
+    survey.fromJSON({
+      elements: [
+        {
+          type: "panel",
+          name: "panel",
+          state: "collapsed",
+          elements: [
+            {
+              "type": "text",
+              "name": "q2"
+            }
+          ]
+        }
+      ]
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel");
+    expect(panel.state, "the panel is collapsed").toBe("collapsed");
+    expect(panel.hasTitle, "We are in design mode and state is not default, #1").toBe(true);
+    expect(panel.locTitle.renderedHtml, "Render name, #1").toBe("panel");
+    panel.expand();
+    expect(panel.state, "the panel is expanded").toBe("expanded");
+    expect(panel.hasTitle, "We are in design mode and state is not default, #2").toBe(true);
+    expect(panel.locTitle.renderedHtml, "Render name, #2").toBe("panel");
+    panel.state = "default";
+    expect(panel.state, "the panel is not collapsed or expanded").toBe("default");
+    expect(panel.hasTitle, "We do not render the title").toBe(false);
+    expect(panel.locTitle.renderedHtml, "Render title is empty, #3").toBeFalsy();
+  });
+
+  test("Check updateRowsOnElementAdded: insert on empty page", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1"
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = new QuestionTextModel("q1");
+    page.addElement(question, 0);
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.length).toBe(1);
+    expect(page.rows[0].visibleElements[0].name).toBe("q1");
+
+  });
+  test("Check updateRowsOnElementAdded: insert into page with latest index and swnl: false", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1"
+            }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = new QuestionTextModel("q2");
+    question.startWithNewLine = false;
+    page.addElement(question, 1);
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.length).toBe(2);
+    expect(page.rows[0].visibleElements[0].name).toBe("q1");
+    expect(page.rows[0].visibleElements[1].name).toBe("q2");
+  });
+  test("Check updateRowsOnElementAdded: insert into page with latest index and swnl: true", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1"
+            }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = new QuestionTextModel("q2");
+    question.startWithNewLine = true;
+    page.addElement(question, 1);
+    expect(page.rows.length).toBe(2);
+    expect(page.rows[0].visibleElements.length).toBe(1);
+    expect(page.rows[0].visibleElements[0].name).toBe("q1");
+    expect(page.rows[1].visibleElements.length).toBe(1);
+    expect(page.rows[1].visibleElements[0].name).toBe("q2");
+  });
+  test("Check updateRowsOnElementAdded: insert into page with zero index and swnl: false for next element", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              name: "q1",
+              type: "text",
+              startWithNewLine: false
+            }
+          ]
+        }
+      ]
+    };
+    let survey = new SurveyModel();
+    survey.fromJSON(json);
+    let page = <PageModel>survey.getPageByName("page1");
+    let question = new QuestionTextModel("q2");
+    page.addElement(question, 0);
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.length).toBe(2);
+    expect(page.rows[0].visibleElements[0].name).toBe("q2");
+    expect(page.rows[0].visibleElements[1].name).toBe("q1");
+
+    survey = new SurveyModel();
+    survey.fromJSON(json);
+    page = <PageModel>survey.getPageByName("page1");
+    question = new QuestionTextModel("q2");
+    question.startWithNewLine = false;
+    page.addElement(question, 0);
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.length).toBe(2);
+    expect(page.rows[0].visibleElements[0].name).toBe("q2");
+    expect(page.rows[0].visibleElements[1].name).toBe("q1");
+  });
+  test("Check updateRowsOnElementAdded: insert into page with zero index and swnl: true for next element", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              name: "q1",
+              type: "text",
+              startWithNewLine: true
+            }
+          ]
+        }
+      ]
+    };
+    let survey = new SurveyModel();
+    survey.fromJSON(json);
+    let page = <PageModel>survey.getPageByName("page1");
+    let question = new QuestionTextModel("q2");
+    page.addElement(question, 0);
+    expect(page.rows.length).toBe(2);
+    expect(page.rows[0].visibleElements.length).toBe(1);
+    expect(page.rows[0].visibleElements[0].name).toBe("q2");
+    expect(page.rows[1].visibleElements.length).toBe(1);
+    expect(page.rows[1].visibleElements[0].name).toBe("q1");
+
+    survey = new SurveyModel();
+    survey.fromJSON(json);
+    page = <PageModel>survey.getPageByName("page1");
+    question = new QuestionTextModel("q2");
+    question.startWithNewLine = false;
+    page.addElement(question, 0);
+    expect(page.rows[0].visibleElements.length).toBe(1);
+    expect(page.rows[0].visibleElements[0].name).toBe("q2");
+    expect(page.rows[1].visibleElements.length).toBe(1);
+    expect(page.rows[1].visibleElements[0].name).toBe("q1");
+  });
+  test("Check updateRowsOnElementAdded method: insert between elements in one row with swnl: false", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    let question = new QuestionTextModel("q6");
+    question.startWithNewLine = false;
+    page.addElement(question, 2);
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q6", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question = new QuestionTextModel("q7");
+    question.startWithNewLine = false;
+    page.addElement(question, 4);
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q6", "q3", "q7", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+  test("Check updateRowsOnElementAdded method: insert between elements in one row with swnl: true", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    let question = new QuestionTextModel("q6");
+    question.startWithNewLine = true;
+    page.addElement(question, 2);
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q6", "q3", "q4"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question = new QuestionTextModel("q7");
+    question.startWithNewLine = true;
+    page.addElement(question, 4);
+    expect(page.rows.length).toBe(5);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q6", "q3"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q7", "q4"]);
+    expect(page.rows[4].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+  test("Check updateRowsOnElementAdded method: insert between rows with swnl: false", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2", startWithNewLine: false },
+            { type: "text", name: "q3", },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    let question = new QuestionTextModel("q6");
+    question.startWithNewLine = false;
+    page.addElement(question, 2);
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2", "q6"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question = new QuestionTextModel("q7");
+    question.startWithNewLine = false;
+    page.addElement(question, 5);
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2", "q6"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4", "q7"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+  test("Check updateRowsOnElementAdded method: insert between rows with swnl: true", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2", startWithNewLine: false },
+            { type: "text", name: "q3", },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" }
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    let question = new QuestionTextModel("q6");
+    question.startWithNewLine = true;
+    page.addElement(question, 2);
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q6"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question = new QuestionTextModel("q7");
+    question.startWithNewLine = true;
+    page.addElement(question, 5);
+    expect(page.rows.length).toBe(5);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q6"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q7"]);
+    expect(page.rows[4].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+  describe("several elements added to elements in one call each get a layout row", () => {
+    const containers: Array<{ name: string, create: () => PanelModel | PageModel }> = [
+      { name: "page", create: () => {
+        const survey = new SurveyModel({ elements: [{ type: "text", name: "q0" }, { type: "text", name: "q1" }] });
+        const page = survey.pages[0];
+        page.onFirstRendering();
+        return page;
+      } },
+      { name: "nested panel", create: () => {
+        const survey = new SurveyModel({ elements: [{ type: "panel", name: "panel",
+          elements: [{ type: "text", name: "q0" }, { type: "text", name: "q1" }] }] });
+        survey.pages[0].onFirstRendering();
+        const panel = <PanelModel>survey.getPanelByName("panel");
+        panel.onFirstRendering();
+        return panel;
+      } }
+    ];
+    const createQuestions = (startWithNewLine: boolean = true): Array<QuestionTextModel> => ["a", "b"].map(name => {
+      const question = new QuestionTextModel(name);
+      question.startWithNewLine = startWithNewLine;
+      return question;
+    });
+    const rowNames = (container: PanelModel | PageModel): Array<Array<string>> =>
+      container.rows.map(row => row.elements.map(el => el.name));
+    containers.forEach(container => {
+      test(container.name + ": push", () => {
+        const panel = container.create();
+        expect(rowNames(panel), "#1").toEqual([["q0"], ["q1"]]);
+        panel.elements.push(...createQuestions());
+        expect(rowNames(panel), "#2").toEqual([["q0"], ["q1"], ["a"], ["b"]]);
+      });
+      test(container.name + ": splice in the middle", () => {
+        const panel = container.create();
+        panel.elements.splice(1, 0, ...createQuestions());
+        expect(rowNames(panel), "#1").toEqual([["q0"], ["a"], ["b"], ["q1"]]);
+      });
+      test(container.name + ": unshift", () => {
+        const panel = container.create();
+        panel.elements.unshift(...createQuestions());
+        expect(rowNames(panel), "#1").toEqual([["a"], ["b"], ["q0"], ["q1"]]);
+      });
+      test(container.name + ": splice in the middle with the second element on the same line", () => {
+        const panel = container.create();
+        const questions = createQuestions();
+        questions[1].startWithNewLine = false;
+        panel.elements.splice(1, 0, ...questions);
+        expect(rowNames(panel), "#1").toEqual([["q0"], ["a", "b"], ["q1"]]);
+      });
+      test(container.name + ": push of two elements on the same line", () => {
+        const panel = container.create();
+        panel.elements.push(...createQuestions(false));
+        expect(rowNames(panel), "#1").toEqual([["q0"], ["q1", "a", "b"]]);
+      });
+    });
+    ["inputPerPage", "questionPerPage"].forEach(mode => {
+      test(mode + ": an element added next to the current one gets no row", () => {
+        const survey = new SurveyModel({ questionsOnPageMode: mode,
+          elements: [{ type: "text", name: "q0" }, { type: "text", name: "q1" }, { type: "text", name: "q2" }] });
+        const page = survey.pages[0];
+        page.onFirstRendering();
+        expect(survey.currentSingleElement.name, "#1: the current element").toBe("q0");
+        expect(rowNames(page), "#2").toEqual([["q0"]]);
+        page.elements.splice(2, 0, new QuestionTextModel("a"));
+        expect(rowNames(page), "#3: splice").toEqual([["q0"]]);
+        page.elements.unshift(new QuestionTextModel("b"));
+        expect(rowNames(page), "#4: unshift").toEqual([["q0"]]);
+        page.elements.push(...createQuestions());
+        expect(rowNames(page), "#5: push").toEqual([["q0"]]);
+        page.addNewQuestion("text", "c", 3);
+        expect(rowNames(page), "#6: addNewQuestion").toEqual([["q0"]]);
+      });
+    });
+  });
+  test("Check swnl changed: change swnl for first element on page", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2", startWithNewLine: false },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = survey.getQuestionByName("q1");
+
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+
+    question.startWithNewLine = false;
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+
+    question.startWithNewLine = true;
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+  });
+  test("Check swnl changed: change swnl for first element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = survey.getQuestionByName("q2");
+
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question.startWithNewLine = false;
+    expect(page.rows.length).toBe(2);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2", "q3", "q4"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+
+  test("Check swnl changed: change swnl for last element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = survey.getQuestionByName("q4");
+
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+
+    question.startWithNewLine = true;
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q4"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q5"]);
+  });
+
+  test("Check swnl changed: change swnl for middle element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5", startWithNewLine: false },
+            { type: "text", name: "q6", startWithNewLine: false },
+            { type: "text", name: "q7" },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = survey.getQuestionByName("q4");
+
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4", "q5", "q6"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q7"]);
+
+    question.startWithNewLine = true;
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q4", "q5", "q6"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q7"]);
+  });
+
+  test("Check swnl changed: change swnl for single element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "text", name: "q1" },
+            { type: "text", name: "q2" },
+            { type: "text", name: "q3", startWithNewLine: false },
+            { type: "text", name: "q4", startWithNewLine: false },
+            { type: "text", name: "q5" },
+            { type: "text", name: "q6" },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    const question = survey.getQuestionByName("q5");
+
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q6"]);
+
+    question.startWithNewLine = false;
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q2", "q3", "q4", "q5"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q6"]);
+  });
+
+  test("Check insert function: insert in empty page", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    expect(page.rows.length).toBe(0);
+    page.insertElement(new QuestionTextModel("q1"));
+    expect(page.rows.length).toBe(1);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1"]);
+  });
+
+  test("Check insert function: insert before first element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+            {
+              type: "text",
+              name: "q4",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q5",
+            },
+            {
+              type: "text",
+              name: "q6",
+              startWithNewLine: false
+            },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    let calledBuildRows = 0;
+    page["onRowsChanged"] = () => {
+      calledBuildRows++;
+    };
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q7"), survey.getQuestionByName("q3"), "left");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q7", "q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    expect(calledBuildRows).toBe(0);
+  });
+  test("Check insert function: insert after last element in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+            {
+              type: "text",
+              name: "q4",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q5",
+            },
+            {
+              type: "text",
+              name: "q6",
+              startWithNewLine: false
+            },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+    let calledBuildRows = 0;
+    page["onRowsChanged"] = () => {
+      calledBuildRows++;
+    };
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q7"), survey.getQuestionByName("q4"), "right");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4", "q7"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    expect(calledBuildRows).toBe(0);
+  });
+
+  test("Check insert function: insert between elements in row", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+            {
+              type: "text",
+              name: "q4",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q5",
+            },
+            {
+              type: "text",
+              name: "q6",
+              startWithNewLine: false
+            },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+
+    let calledBuildRows = 0;
+    page["onRowsChanged"] = () => {
+      calledBuildRows++;
+    };
+
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q7"), survey.getQuestionByName("q3"), "right");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q7", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q8"), survey.getQuestionByName("q7"), "left");
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q8", "q7", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    expect(calledBuildRows).toBe(0);
+
+  });
+
+  test("Check insert function: insert between rows", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              type: "text",
+              name: "q1",
+            },
+            {
+              type: "text",
+              name: "q2",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+            {
+              type: "text",
+              name: "q4",
+              startWithNewLine: false
+            },
+            {
+              type: "text",
+              name: "q5",
+            },
+            {
+              type: "text",
+              name: "q6",
+              startWithNewLine: false
+            },
+          ]
+        }
+      ]
+    });
+    const page = <PageModel>survey.getPageByName("page1");
+
+    let calledBuildRows = 0;
+    page["onRowsChanged"] = () => {
+      calledBuildRows++;
+    };
+
+    expect(page.rows.length).toBe(3);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q7"), survey.getQuestionByName("q4"), "bottom");
+    expect(page.rows.length).toBe(4);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q7"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q8"), survey.getQuestionByName("q3"), "top");
+    expect(page.rows.length).toBe(5);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q8"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q7"]);
+    expect(page.rows[4].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q9"), survey.getQuestionByName("q4"), "top");
+    expect(page.rows.length).toBe(6);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q8"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q9"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[4].visibleElements.map(q => q.name)).toEqual(["q7"]);
+    expect(page.rows[5].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    page.insertElement(new QuestionTextModel("q10"), survey.getQuestionByName("q3"), "bottom");
+    expect(page.rows.length).toBe(7);
+    expect(page.rows[0].visibleElements.map(q => q.name)).toEqual(["q1", "q2"]);
+    expect(page.rows[1].visibleElements.map(q => q.name)).toEqual(["q8"]);
+    expect(page.rows[2].visibleElements.map(q => q.name)).toEqual(["q9"]);
+    expect(page.rows[3].visibleElements.map(q => q.name)).toEqual(["q3", "q4"]);
+    expect(page.rows[4].visibleElements.map(q => q.name)).toEqual(["q10"]);
+    expect(page.rows[5].visibleElements.map(q => q.name)).toEqual(["q7"]);
+    expect(page.rows[6].visibleElements.map(q => q.name)).toEqual(["q5", "q6"]);
+
+    expect(calledBuildRows).toBe(0);
+  });
+  test("Do not expand panels on validation that doesn't have an error Bug#8341", () => {
+    const survey = new SurveyModel({
+      "elements": [
+        {
+          "type": "text",
+          "name": "question1",
+          "isRequired": true
+        },
+        {
+          "type": "panel",
+          "name": "panel1",
+          "elements": [
+            {
+              "type": "text",
+              "name": "question2"
+            }
+          ],
+          "title": "Title",
+          "state": "collapsed"
+        },
+        {
+          "type": "panel",
+          "name": "panel2",
+          "elements": [
+            {
+              "type": "text",
+              "name": "question3",
+              "isRequired": true
+            }
+          ],
+          "title": "Title",
+          "state": "collapsed"
+        },
+        {
+          "type": "panel",
+          "name": "panel3",
+          "elements": [
+            {
+              "type": "panel",
+              "name": "panel4",
+              "elements": [
+                {
+                  "type": "text",
+                  "name": "question4",
+                  "isRequired": true
+                }
+              ],
+              "title": "Title",
+              "state": "collapsed"
+            }
+          ],
+          "title": "Title",
+          "state": "collapsed"
+        },
+        {
+          "type": "panel",
+          "name": "panel5",
+          "isRequired": true,
+          "elements": [
+            {
+              "type": "text",
+              "name": "question2"
+            }
+          ],
+          "title": "Title",
+          "state": "collapsed"
+        },
+      ]
+    });
+    survey.validate(true, true);
+    const panels = survey.getAllPanels();
+    expect(panels[0].isCollapsed, "The panel should rename collapsed").toBe(true);
+    expect(panels[1].isExpanded, "The panel should be expanded, it has error inside, #1").toBe(true);
+    expect(panels[2].isExpanded, "The panel should be expanded, it has error inside, #2").toBe(true);
+    expect(panels[3].isExpanded, "The panel should be expanded, it has error inside, #3").toBe(true);
+    expect(panels[4].isExpanded, "The panel should be expanded, panel is required, #4").toBe(true);
+  });
+  test("Check if errors disappered in the closest questions on changing the question, checkErrorsMode: 'onValueChanged', Bug#8539", () => {
+    const survey = new SurveyModel({
+      checkErrorsMode: "onValueChanged",
+      elements: [
+        {
+          type: "text", name: "q1",
+          validators: [{ type: "expression", expression: "{q1} + {q2} <= 10" }]
+        },
+        { type: "text", name: "q3" },
+        {
+          type: "text", name: "q2",
+          validators: [{ type: "expression", expression: "{q1} + {q2} <= 10" }]
+        }
+      ]
+    });
+    const q1 = survey.getQuestionByName("q1");
+    const q2 = survey.getQuestionByName("q2");
+    q1.value = 5;
+    q2.value = 6;
+    expect(q1.errors.length, "q1.errors #1").toBe(0);
+    expect(q2.errors.length, "q2.errors #1").toBe(1);
+    q1.value = 3;
+    expect(q1.errors.length, "q1.errors #2").toBe(0);
+    expect(q2.errors.length, "q2.errors #2").toBe(0);
+    q1.value = 7;
+    expect(q1.errors.length, "q1.errors #3").toBe(1);
+    expect(q2.errors.length, "q2.errors #3").toBe(0);
+    q2.value = 2;
+    expect(q1.errors.length, "q1.errors #4").toBe(0);
+    expect(q2.errors.length, "q2.errors #4").toBe(0);
+  });
+  test("Check if errors disappered in the closest questions on changing the question, Bug#8539", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          type: "text", name: "q1",
+          validators: [{ type: "expression", expression: "{q1} + {q2} <= 10" }]
+        },
+        { type: "text", name: "q3" },
+        {
+          type: "text", name: "q2",
+          validators: [{ type: "expression", expression: "{q1} + {q2} <= 10" }]
+        }
+      ]
+    });
+    const q1 = survey.getQuestionByName("q1");
+    const q2 = survey.getQuestionByName("q2");
+    q1.value = 5;
+    q2.value = 6;
+    expect(q1.errors.length, "q1.errors #1").toBe(0);
+    expect(q2.errors.length, "q2.errors #1").toBe(0);
+    expect(survey.tryComplete(), "Could not complete").toBe(false);
+    expect(q1.errors.length, "q1.errors #2").toBe(1);
+    expect(q2.errors.length, "q2.errors #2").toBe(1);
+    q1.value = 1;
+    expect(q1.errors.length, "q1.errors #3").toBe(0);
+    expect(q2.errors.length, "q2.errors #3").toBe(0);
+  });
+
+  test("Panel hasTextInTitle - reactive property #8816", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "panel", name: "panel1" },
+        { type: "panel", name: "panel2", title: "Panel 2" }
+      ]
+    });
+    const panel1 = survey.getPanelByName("panel1");
+    const panel2 = survey.getPanelByName("panel2");
+    expect(panel1.hasTextInTitle, "panel1 #1, hasTextInTitle").toBe(false);
+    expect(panel1.hasTitle, "panel1 #1, hasTitle").toBe(false);
+
+    expect(panel2.hasTextInTitle, "panel2 #1, hasTextInTitle").toBe(true);
+    expect(panel2.hasTextInTitle, "panel2 #1, hasTitle").toBe(true);
+
+    panel1.title = "Panel 1";
+    expect(panel1.hasTextInTitle, "panel1 #2, hasTextInTitle").toBe(true);
+    expect(panel1.hasTitle, "panel1 #2, hasTitle").toBe(true);
+
+    panel2.title = "";
+    expect(panel2.hasTextInTitle, "panel2 #2, hasTextInTitle").toBe(false);
+    expect(panel2.hasTitle, "panel2 #2, hasTitle").toBe(false);
+  });
+
+  test("row.isNeedRender for panels", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              "type": "panel",
+              "name": "panel1",
+              "elements": [
+                {
+                  type: "text",
+                  name: "q1",
+                },
+                {
+                  type: "text",
+                  name: "q2",
+                },
+
+              ]
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+          ],
+        }
+      ],
+    };
+
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+      expect(page1.rows.length, "There are 2 rows").toBe(2);
+      expect(page1.rows[0].isNeedRender, "isNeedRender page1 rows[0]").toBe(true);
+      expect(page1.rows[1].isNeedRender, "isNeedRender page1 rows[1]").toBe(false);
+
+      const panel1 = survey.pages[0].elements[0] as PanelModel;
+      expect(panel1.rows.length, "There are 2 rows in panel1").toBe(2);
+      expect(panel1.rows[0].isNeedRender, "isNeedRender panel1 rows[0]").toBe(false);
+      expect(panel1.rows[1].isNeedRender, "isNeedRender panel1 rows[1]").toBe(false);
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("getAllRows for page", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              "type": "panel",
+              "name": "panel1",
+              "elements": [
+                {
+                  type: "text",
+                  name: "q1",
+                },
+                {
+                  type: "text",
+                  name: "q2",
+                },
+
+              ]
+            },
+            {
+              type: "text",
+              name: "q3",
+            },
+          ],
+        }
+      ],
+    };
+
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+      const allPageRows = page1.getAllRows();
+
+      expect(allPageRows.length, "There are 4 rows").toBe(4);
+      expect(allPageRows[0].elements[0].name).toBe("panel1");
+      expect(allPageRows[1].elements[0].name).toBe("q1");
+      expect(allPageRows[2].elements[0].name).toBe("q2");
+      expect(allPageRows[3].elements[0].name).toBe("q3");
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("forceRenderRows for page", async () => {
+    return new Promise(function(resolve) {
+      let __remaining = 1;
+      const __done = function() { if (--__remaining <= 0) resolve(); };
+
+      const done = __done;
+      const json = {
+        pages: [
+          {
+            name: "page1",
+            elements: [
+              {
+                "type": "panel",
+                "name": "panel1",
+                "elements": [
+                  {
+                    type: "text",
+                    name: "q1",
+                  },
+                  {
+                    type: "text",
+                    name: "q2",
+                  },
+
+                ]
+              },
+              {
+                type: "text",
+                name: "q3",
+              },
+            ],
+          }
+        ],
+      };
+
+      const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+      settings.lazyRowsRenderingStartRow = 0;
+      try {
+        const survey = new SurveyModel(json);
+        survey.lazyRenderEnabled = true;
+        survey.getAllQuestions().forEach(q => {
+          q.supportOnElementRerenderedEvent = true;
+          q.onElementRerenderedEventEnabled = true;
+        });
+        const page1: PageModel = survey.pages[0];
+        const allPageRows = page1.getAllRows();
+        expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+        expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+        expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(false);
+        expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(false);
+
+        page1.forceRenderRows([allPageRows[2], allPageRows[3]], () => {
+          settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+          expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+          expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+          expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(true);
+          expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(true);
+          done();
+        });
+        survey.getQuestionByName("q2").onElementRerendered.fire({} as any, {});
+        survey.getQuestionByName("q3").onElementRerendered.fire({} as any, {});
+      } finally {
+        settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+      }
+    });
+  });
+  test("forceRenderElement for page the exact element, gap = 0", async () => {
+    return new Promise(function(resolve) {
+      let __remaining = 1;
+      const __done = function() { if (--__remaining <= 0) resolve(); };
+
+      const done = __done;
+      const json = {
+        pages: [
+          {
+            name: "page1",
+            elements: [
+              {
+                "type": "panel",
+                "name": "panel1",
+                "elements": [
+                  {
+                    type: "text",
+                    name: "q1",
+                  },
+                  {
+                    type: "text",
+                    name: "q2",
+                  },
+
+                ]
+              },
+              {
+                type: "text",
+                name: "q3",
+              },
+            ],
+          }
+        ],
+      };
+
+      const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+      settings.lazyRowsRenderingStartRow = 0;
+      try {
+        const survey = new SurveyModel(json);
+        survey.lazyRenderEnabled = true;
+        survey.getAllQuestions().forEach(q => {
+          q.supportOnElementRerenderedEvent = true;
+          q.onElementRerenderedEventEnabled = true;
+        });
+        const page1: PageModel = survey.pages[0];
+        const allPageRows = page1.getAllRows();
+        expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+        expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+        expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(false);
+        expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(false);
+
+        page1.forceRenderElement(survey.getQuestionByName("q3"), () => {
+          settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+          expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+          expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+          expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(false);
+          expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(true);
+          done();
+        });
+        survey.getQuestionByName("q3").onElementRerendered.fire({} as any, {});
+      } finally {
+        settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+      }
+    });
+  });
+  test("forceRenderElement for page with one prev element, gap = 1", async () => {
+    return new Promise(function(resolve) {
+      let __remaining = 1;
+      const __done = function() { if (--__remaining <= 0) resolve(); };
+
+      const done = __done;
+      const json = {
+        pages: [
+          {
+            name: "page1",
+            elements: [
+              {
+                "type": "panel",
+                "name": "panel1",
+                "elements": [
+                  {
+                    type: "text",
+                    name: "q1",
+                  },
+                  {
+                    type: "text",
+                    name: "q2",
+                  },
+
+                ]
+              },
+              {
+                type: "text",
+                name: "q3",
+              },
+            ],
+          }
+        ],
+      };
+
+      const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+      settings.lazyRowsRenderingStartRow = 0;
+      try {
+        const survey = new SurveyModel(json);
+        survey.lazyRenderEnabled = true;
+        survey.getAllQuestions().forEach(q => {
+          q.supportOnElementRerenderedEvent = true;
+          q.onElementRerenderedEventEnabled = true;
+        });
+        const page1: PageModel = survey.pages[0];
+        const allPageRows = page1.getAllRows();
+        expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+        expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+        expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(false);
+        expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(false);
+
+        page1.forceRenderElement(survey.getQuestionByName("q3"), () => {
+          settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+          expect(allPageRows[0].isNeedRender, "isNeedRender for panel").toBe(true);
+          expect(allPageRows[1].isNeedRender, "isNeedRender for q1").toBe(false);
+          expect(allPageRows[2].isNeedRender, "isNeedRender for q2").toBe(true);
+          expect(allPageRows[3].isNeedRender, "isNeedRender for q3").toBe(true);
+          done();
+        }, 1);
+        survey.getQuestionByName("q2").onElementRerendered.fire({} as any, {});
+        survey.getQuestionByName("q3").onElementRerendered.fire({} as any, {});
+      } finally {
+        settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+      }
+    });
+  });
+  test("row.isNeedRender for nested panels", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              "type": "panel",
+              "name": "panel1",
+              "elements": [
+                {
+                  "type": "panel",
+                  "name": "panel2",
+                  "elements": [
+                    {
+                      "type": "panel",
+                      "name": "panel3",
+                      "elements": [
+                        {
+                          type: "text",
+                          name: "q1",
+                        },
+                        {
+                          type: "text",
+                          name: "q2",
+                        },
+
+                      ]
+                    },
+                  ]
+                },
+                {
+                  type: "text",
+                  name: "q3",
+                },
+              ]
+            },
+            {
+              type: "text",
+              name: "q4",
+            },
+          ],
+        }
+      ],
+    };
+
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+      const allPageRows = page1.getAllRows();
+      expect(allPageRows.length, "7 rows with panels").toBe(7);
+      expect(allPageRows[0].isNeedRender, "isNeedRender for panel1").toBe(true);
+      expect(allPageRows[1].isNeedRender, "isNeedRender for panel2").toBe(true);
+      expect(allPageRows[2].isNeedRender, "isNeedRender for panel3").toBe(true);
+      expect(allPageRows[3].isNeedRender, "isNeedRender for q1").toBe(false);
+      expect(allPageRows[4].isNeedRender, "isNeedRender for q2").toBe(false);
+      expect(allPageRows[5].isNeedRender, "isNeedRender for q3").toBe(false);
+      expect(allPageRows[6].isNeedRender, "isNeedRender for q4").toBe(false);
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("row.isNeedRender for nested panels - complex", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              "type": "panel",
+              "name": "panel1",
+              "elements": [
+                {
+                  "type": "paneldynamic",
+                  "name": "panel2",
+                  "templateElements": [
+                    {
+                      "type": "text",
+                      "name": "q1",
+                    },
+                    {
+                      "type": "text",
+                      "name": "q2",
+                      "startWithNewLine": false,
+                    },
+                    {
+                      "type": "text",
+                      "name": "q3",
+                    },
+                    {
+                      "type": "text",
+                      "name": "q4",
+                      "startWithNewLine": false,
+                    },
+                  ],
+                  "templateTitle": "item #{panelIndex}",
+                  "panelCount": 1,
+                  "minPanelCount": 1,
+                  "keyName": "name",
+                },
+                {
+                  "type": "panel",
+                  "name": "panel3",
+                  "title": "Totals",
+                  "elements": [
+                    {
+                      "type": "expression",
+                      "name": "q5",
+                    },
+                    {
+                      "type": "expression",
+                      "name": "q6",
+                      "startWithNewLine": false,
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "name": "last-question"
+            }
+          ],
+        }
+      ],
+    };
+
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+      const allPageRows = page1.getAllRows();
+      expect(allPageRows.length, "7 rows with panels").toBe(7);
+      expect(allPageRows[0].elements[0].name).toBe("panel1");
+      expect(allPageRows[0].isNeedRender, "isNeedRender for panel1").toBe(true);
+      expect(allPageRows[1].elements[0].name, "panel2 - paneldynamic").toBe("panel2");
+      expect(allPageRows[1].isNeedRender, "isNeedRender for panel2").toBe(true);
+      expect(allPageRows[2].elements[0].name).toBe("q1");
+      // expect(allPageRows[2].isNeedRender, "isNeedRender for q1, q2").toBe(false);
+      expect(allPageRows[3].elements[0].name).toBe("q3");
+      // expect(allPageRows[3].isNeedRender, "isNeedRender for q3, q4").toBe(false);
+      expect(allPageRows[4].elements[0].name).toBe("panel3");
+      expect(allPageRows[4].isNeedRender, "isNeedRender for panel3").toBe(true);
+      expect(allPageRows[5].elements[0].name).toBe("q5");
+      expect(allPageRows[5].isNeedRender, "isNeedRender for q5, q6").toBe(false);
+      expect(allPageRows[6].elements[0].name).toBe("last-question");
+      expect(allPageRows[6].isNeedRender, "isNeedRender for q-last").toBe(false);
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("row.isNeedRender panel dynamic different modes - ordinary and designer", () => {
+    const json = {
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            {
+              "type": "paneldynamic",
+              "name": "panel1",
+              "templateElements": [
+                {
+                  "type": "text",
+                  "name": "q1",
+                },
+                {
+                  "type": "text",
+                  "name": "q2",
+                  "startWithNewLine": false,
+                },
+                {
+                  "type": "text",
+                  "name": "q3",
+                },
+                {
+                  "type": "text",
+                  "name": "q4",
+                  "startWithNewLine": false,
+                },
+              ],
+              "templateTitle": "item #{panelIndex}",
+              "panelCount": 2,
+              "minPanelCount": 1,
+            },
+          ],
+        }
+      ],
+    };
+
+    const prevStartRowInLazyRendering = settings.lazyRowsRenderingStartRow;
+    settings.lazyRowsRenderingStartRow = 0;
+    try {
+      const survey = new SurveyModel(json);
+      survey.lazyRenderEnabled = true;
+      const page1: PageModel = survey.pages[0];
+
+      let allPageRows = page1.getAllRows();
+      expect(allPageRows.length, "7 rows with inner panels in runtime mode").toBe(5);
+      expect(allPageRows[0].elements[0].name).toBe("panel1");
+      expect(allPageRows[0].isNeedRender, "isNeedRender for panel1").toBe(true);
+      expect(allPageRows[1].elements[0].name).toBe("q1");
+      // expect(allPageRows[1].isNeedRender, "isNeedRender for q1, q2").toBe(false);
+      expect(allPageRows[2].elements[0].name).toBe("q3");
+      // expect(allPageRows[2].isNeedRender, "isNeedRender for q3, q4").toBe(false);
+      expect(allPageRows[3].elements[0].name).toBe("q1");
+      // expect(allPageRows[3].isNeedRender, "isNeedRender for q1, q2").toBe(false);
+      expect(allPageRows[4].elements[0].name).toBe("q3");
+      // expect(allPageRows[4].isNeedRender, "isNeedRender for q3, q4").toBe(false);
+
+      survey.setDesignMode(true);
+      allPageRows = page1.getAllRows();
+      expect(allPageRows.length, "3 rows with inner panels in design mode").toBe(3);
+      expect(allPageRows[0].elements[0].name).toBe("panel1");
+      expect(allPageRows[0].isNeedRender, "isNeedRender for panel1").toBe(true);
+      expect(allPageRows[1].elements[0].name).toBe("q1");
+      // expect(allPageRows[1].isNeedRender, "isNeedRender for q1, q2").toBe(false);
+      expect(allPageRows[2].elements[0].name).toBe("q3");
+    // expect(allPageRows[2].isNeedRender, "isNeedRender for q3, q4").toBe(false);
+    } finally {
+      settings.lazyRowsRenderingStartRow = prevStartRowInLazyRendering;
+    }
+  });
+  test("Nested pages", () => {
+    const survey = new SurveyModel({
+      pages: [
+        { name: "page1", elements: [{ type: "text", name: "q1" }] },
+        { name: "page2", elements: [{ type: "text", name: "q2" }] }
+      ]
+    });
+    const page1 = survey.pages[0];
+    expect(page1.isPage, "isPage #1").toBe(true);
+    expect(page1.isPanel, "isPanel #1").toBe(false);
+    expect(page1.getTemplate(), "template #1").toBe("page");
+    expect(page1.survey.state, "survey state #1").toBe("running");
+    const rootPage = new PageModel("p1");
+    rootPage.isPageContainer = true;
+    rootPage.addElement(page1);
+    expect(page1.isPage, "isPage #2").toBe(false);
+    expect(page1.isPanel, "isPanel #2").toBe(true);
+    expect(page1.getTemplate(), "template #2").toBe("panel");
+    expect(page1.survey.state, "survey state #2").toBe("running");
+    page1.parent = null;
+    expect(page1.isPage, "isPage #3").toBe(true);
+    expect(page1.isPanel, "isPanel #3").toBe(false);
+    expect(page1.getTemplate(), "template #3").toBe("page");
+    expect(page1.survey.state, "survey state #3").toBe("running");
+    expect(page1.isDisposed, "The page is not disposed").toBe(false);
+  });
+  test("survey.onGetPanelNumber", () => {
+    const survey = new SurveyModel({
+      showQuestionNumbers: true,
+      elements: [
+        {
+          type: "panel", name: "panel1", title: "Panel 1",
+          showNumber: true, showQuestionNumbers: "onpanel",
+          elements: [
+            {
+              type: "panel", name: "panel2",
+              showNumber: true, showQuestionNumbers: "onpanel", title: "Panel 2",
+              elements: [
+                { type: "text", name: "q1" },
+                { type: "text", name: "q2" }
+              ]
+            },
+            { type: "text", name: "q3" },
+            { type: "text", name: "q4" }
+          ]
+        },
+        {
+          type: "panel", name: "panel3",
+          showNumber: true, showQuestionNumbers: "onpanel", title: "Panel 3",
+          elements: [
+            { type: "text", name: "q5" },
+            { type: "text", name: "q6" }
+          ]
+        },
+        { type: "text", name: "q7" }
+      ]
+    });
+    survey.onGetQuestionNumber.add((sender, options) => {
+      const parent: any = options.question.parent;
+      if (!!parent && parent.no) {
+        options.number = parent.no + options.number;
+      }
+    });
+    survey.onGetPanelNumber.add((sender, options) => {
+      const parent: any = options.panel.parent;
+      if (!!parent && parent.no) {
+        options.number = parent.no + options.number;
+      }
+    });
+    expect(survey.getPanelByName("panel1").no, "panel1.no").toBe("1.");
+    expect(survey.getPanelByName("panel2").no, "panel2.no").toBe("1.1.");
+    expect(survey.getPanelByName("panel3").no, "panel3.no").toBe("2.");
+    expect(survey.getQuestionByName("q1").no, "q1.no").toBe("1.1.1.");
+    expect(survey.getQuestionByName("q2").no, "q2.no").toBe("1.1.2.");
+    expect(survey.getQuestionByName("q3").no, "q3.no").toBe("1.2.");
+    expect(survey.getQuestionByName("q4").no, "q4.no").toBe("1.3.");
+    expect(survey.getQuestionByName("q5").no, "q5.no").toBe("2.1.");
+    expect(survey.getQuestionByName("q6").no, "q6.no").toBe("2.2.");
+    expect(survey.getQuestionByName("q7").no, "q7.no").toBe("3.");
+  });
+  test("panel.showQuestionNumbers: 'recursive'", () => {
+    const survey = new SurveyModel({
+      showQuestionNumbers: true,
+      elements: [
+        {
+          type: "panel", name: "panel1", title: "Panel 1",
+          showNumber: true, showQuestionNumbers: "recursive",
+          elements: [
+            {
+              type: "panel", name: "panel2",
+              showNumber: true, showQuestionNumbers: "recursive", title: "Panel 2",
+              elements: [
+                { type: "text", name: "q1" },
+                { type: "text", name: "q2" }
+              ]
+            },
+            { type: "text", name: "q3" },
+            { type: "text", name: "q4" }
+          ]
+        },
+        {
+          type: "panel", name: "panel3",
+          showNumber: true, showQuestionNumbers: "recursive", title: "Panel 3",
+          elements: [
+            { type: "text", name: "q5" },
+            { type: "text", name: "q6" }
+          ]
+        },
+        { type: "text", name: "q7" }
+      ]
+    });
+    expect(survey.getPanelByName("panel1").no, "panel1.no").toBe("1.");
+    expect(survey.getPanelByName("panel2").no, "panel2.no").toBe("1.1.");
+    expect(survey.getPanelByName("panel3").no, "panel3.no").toBe("2.");
+    expect(survey.getQuestionByName("q1").no, "q1.no").toBe("1.1.1.");
+    expect(survey.getQuestionByName("q2").no, "q2.no").toBe("1.1.2.");
+    expect(survey.getQuestionByName("q3").no, "q3.no").toBe("1.2.");
+    expect(survey.getQuestionByName("q4").no, "q4.no").toBe("1.3.");
+    expect(survey.getQuestionByName("q5").no, "q5.no").toBe("2.1.");
+    expect(survey.getQuestionByName("q6").no, "q6.no").toBe("2.2.");
+    expect(survey.getQuestionByName("q7").no, "q7.no").toBe("3.");
+  });
+  test("survey.showQuestionNumbers: 'recursive' & panels", () => {
+    const survey = new SurveyModel({
+      showQuestionNumbers: "recursive",
+      elements: [
+        {
+          type: "panel", name: "panel1", title: "Panel 1",
+          showNumber: true,
+          elements: [
+            {
+              type: "panel", name: "panel2",
+              title: "Panel 2",
+              elements: [
+                { type: "text", name: "q1" },
+                { type: "text", name: "q2" }
+              ]
+            },
+            { type: "text", name: "q3" },
+            { type: "text", name: "q4" }
+          ]
+        },
+        {
+          type: "panel", name: "panel3",
+          showNumber: true, title: "Panel 3",
+          elements: [
+            { type: "text", name: "q5" },
+            { type: "text", name: "q6" }
+          ]
+        },
+        { type: "text", name: "q7" }
+      ]
+    });
+    expect(survey.getPanelByName("panel1").no, "panel1.no").toBe("1.");
+    expect(survey.getPanelByName("panel2").no, "panel2.no").toBe("1.1.");
+    expect(survey.getPanelByName("panel3").no, "panel3.no").toBe("2.");
+    expect(survey.getQuestionByName("q1").no, "q1.no").toBe("1.1.1.");
+    expect(survey.getQuestionByName("q2").no, "q2.no").toBe("1.1.2.");
+    expect(survey.getQuestionByName("q3").no, "q3.no").toBe("1.2.");
+    expect(survey.getQuestionByName("q4").no, "q4.no").toBe("1.3.");
+    expect(survey.getQuestionByName("q5").no, "q5.no").toBe("2.1.");
+    expect(survey.getQuestionByName("q6").no, "q6.no").toBe("2.2.");
+    expect(survey.getQuestionByName("q7").no, "q7.no").toBe("3.");
+  });
+  test("survey.showQuestionNumbers: 'recursive' & panels & questionStartIndex 1.1, Issue#10456", () => {
+    const survey = new SurveyModel();
+    survey.fromJSON({
+      showQuestionNumbers: "recursive",
+      questionStartIndex: "1.1.",
+      pages: [{
+        elements: [
+          {
+            type: "panel", name: "panel1", title: "Panel 1",
+            showNumber: true,
+            elements: [
+              {
+                type: "panel", name: "panel2",
+                title: "Panel 2",
+                elements: [
+                  { type: "text", name: "q1" },
+                  { type: "text", name: "q2" }
+                ]
+              },
+              { type: "text", name: "q3" },
+              { type: "text", name: "q4" }
+            ]
+          },
+          { type: "panel", name: "panel3", showNumber: true, title: "Panel 4", elements: [
+            { type: "text", name: "q5" }
+          ] },
+          { type: "text", name: "q6" }
+        ] },
+      {
+        elements: [
+          {
+            type: "panel", name: "panel4",
+            showNumber: true, title: "Panel 3",
+            elements: [
+              { type: "text", name: "q7" },
+              { type: "text", name: "q8" }
+            ]
+          },
+          { type: "text", name: "q9" }
+        ] }]
+    });
+    expect(survey.getPanelByName("panel1").no, "panel1.no").toBe("1.1.");
+    expect(survey.getPanelByName("panel2").no, "panel2.no").toBe("1.1.1.");
+    expect(survey.getPanelByName("panel3").no, "panel2.no").toBe("1.2.");
+    expect(survey.getPanelByName("panel4").no, "panel4.no").toBe("2.1.");
+    expect(survey.getQuestionByName("q1").no, "q1.no").toBe("1.1.1.1.");
+    expect(survey.getQuestionByName("q2").no, "q2.no").toBe("1.1.1.2.");
+    expect(survey.getQuestionByName("q3").no, "q3.no").toBe("1.1.2.");
+    expect(survey.getQuestionByName("q4").no, "q4.no").toBe("1.1.3.");
+    expect(survey.getQuestionByName("q5").no, "q5.no").toBe("1.2.1.");
+    expect(survey.getQuestionByName("q6").no, "q6.no").toBe("1.3.");
+    expect(survey.getQuestionByName("q7").no, "q7.no").toBe("2.1.1.");
+    expect(survey.getQuestionByName("q8").no, "q8.no").toBe("2.1.2.");
+    expect(survey.getQuestionByName("q9").no, "q9.no").toBe("2.2.");
+  });
+  test("Check that startWithNewLine doesn't trigger animation", () => {
+    settings.animationEnabled = true;
+    const survey = new SurveyModel({
+      "logoPosition": "right",
+      "pages": [
+        {
+          "name": "page1",
+          "elements": [
+            {
+              "type": "text",
+              "name": "question1"
+            },
+            {
+              "type": "text",
+              "name": "question2"
+            }
+          ]
+        }
+      ]
+    });
+    const question2 = survey.getQuestionByName("question2");
+    const page = survey.getPageByName("page1");
+    page.enableOnElementRerenderedEvent();
+    expect(page.animationAllowed, "check that animation is enabled").toBeTruthy();
+    expect(page.visibleRows.length).toBe(2);
+    question2.startWithNewLine = false;
+    expect(page.visibleRows.length).toBe(1);
+    settings.animationEnabled = false;
+  });
+
+  test("test titleTagName of ", () => {
+    const savedTitleTags = Helpers.createCopy(settings.titleTags);
+    settings.titleTags.survey = "h1";
+    settings.titleTags.page = "h2";
+    settings.titleTags.panel = "h3";
+    settings.titleTags.question = "h4";
+
+    const dynamicContainer = {
+      name: "dynamic_container",
+      title: "Dynamic Container",
+      iconName: "icon-dynamic_container",
+      widgetIsLoaded() { return true; },
+      isFit(question) { return question.getType() === "panel"; },
+      init() {
+        Serializer.addClass("dynamic_container", [], undefined, "panel");
+        Serializer.addProperty("dynamic_container", { name: "section_identifier", displayName: "Section Identifier" });
+      },
+    };
+
+    CustomWidgetCollection.Instance.clear();
+    CustomWidgetCollection.Instance.add(dynamicContainer, "customtype");
+
+    try {
+      const survey = new SurveyModel();
+      const page = survey.addNewPage("Page 1");
+      const panel = Serializer.createClass("dynamic_container", { "type": "dynamic_container", "name": "q1" }) as PanelModel;
+      page.addPanel(panel);
+
+      expect(survey.getAllPanels().length).toBe(1);
+      expect(panel.titleTagName).toBe("h3");
+      expect(page.titleTagName).toBe("h2");
+
+    } finally {
+      CustomWidgetCollection.Instance.clear();
+      settings.titleTags = savedTitleTags;
+    }
+  });
+  test("Add element into non rendered page, bug#10103", () => {
+    const survey = new SurveyModel({
+      pages: [{
+        name: "page1",
+        elements: [
+          {
+            type: "text",
+            name: "q1"
+          }
+        ]
+      },
+      {
+        name: "page2",
+        elements: [
+          {
+            type: "text",
+            name: "q2"
+          }
+        ]
+      }
+      ] });
+    expect(survey.activePage.name, "active page is page1").toBe("page1");
+    const page2 = survey.getPageByName("page2");
+    expect(page2.rows.length, "page2 has no rows yet").toBe(0);
+    page2.addElement(new QuestionTextModel("q3"), 1);
+    expect(page2.rows.length, "page2 still has no rows #1").toBe(0);
+    expect(page2.elements.length, "There are 2 questions").toBe(2);
+    page2.addElement(new QuestionTextModel("q4"), 2);
+    expect(page2.rows.length, "page2 still has no rows #2").toBe(0);
+    expect(page2.elements.length, "There are 3 questions").toBe(3);
+    survey.nextPage();
+    expect(page2.rows.length, "page2 has 3 rows").toBe(3);
+  });
+  test("Panel.validate vs callback function as a parameter #10307", () => {
+    let returnResults = new Array<any>();
+    function asyncFunc(params: any): any {
+      returnResults.push(this.returnResult);
+      return false;
+    }
+    registerFunction({ name: "asyncFunc", func: asyncFunc, isAsync: true, useCache: false });
+    const survey = new SurveyModel({
+      elements: [
+        { type: "text", name: "q1", validators: [{ type: "expression", expression: "asyncFunc({q2})" }] },
+        { type: "text", name: "q2" },
+        { type: "text", name: "q3", validators: [{ type: "expression", expression: "{q2} > {q1}" }] }
+      ]
+    });
+    const page = survey.pages[0];
+    const q1 = survey.getQuestionByName("q1");
+    const q2 = survey.getQuestionByName("q2");
+    const q3 = survey.getQuestionByName("q3");
+    const callbackResults = new Array<any>();
+    q1.value = 1;
+    q2.value = 2;
+    q3.value = 3;
+    const callbackValidators = (res: boolean, question: Question): void => {
+      callbackResults.push({ res: res, name: question?.name || "" });
+    };
+    let res = page.validate(true, false, callbackValidators);
+    expect(res, "res #1").toBeUndefined();
+    expect(returnResults.length, "returnResults, #1").toBe(1);
+    expect(callbackResults, "callbackResults, #1").toEqual([]);
+    expect(q1.errors.length, "q1.errors #1").toBe(0);
+    returnResults[0](false);
+    expect(q1.errors.length, "q1.errors #2").toBe(1);
+    expect(callbackResults, "callbackResults, #2").toEqual([{ res: false, name: "q1" }]);
+
+    q1.value = 3;
+    returnResults.splice(0, returnResults.length);
+    callbackResults.splice(0, callbackResults.length);
+    res = page.validate(true, false, callbackValidators);
+    expect(res, "res #3").toBe(false);
+    expect(returnResults.length, "returnResults, #3").toBe(1);
+    expect(callbackResults, "callbackResults, #3").toEqual([{ res: false, name: "q3" }]);
+    expect(q1.errors.length, "q1.errors #3").toBe(0);
+    expect(q3.errors.length, "q3.errors #3").toBe(1);
+    returnResults[0](false);
+    expect(q1.errors.length, "q1.errors #4").toBe(1);
+    expect(q3.errors.length, "q3.errors #4").toBe(1);
+    expect(callbackResults, "callbackResults, #4").toEqual([{ res: false, name: "q3" }]);
+
+    q2.value = 30;
+    returnResults.splice(0, returnResults.length);
+    callbackResults.splice(0, callbackResults.length);
+    res = page.validate(true, false, callbackValidators);
+    expect(res, "res #5").toBeUndefined();
+    expect(returnResults.length, "returnResults, #5").toBe(1);
+    expect(callbackResults, "callbackResults, #5").toEqual([]);
+    expect(q1.errors.length, "q1.errors #5").toBe(0);
+    expect(q3.errors.length, "q3.errors #5").toBe(0);
+    returnResults[0](true);
+    expect(q1.errors.length, "q1.errors #6").toBe(0);
+    expect(q3.errors.length, "q3.errors #6").toBe(0);
+    expect(callbackResults, "callbackResults, #6").toEqual([{ res: true, name: "" }]);
+
+    FunctionFactory.Instance.unregister("asyncFunc");
+  });
+  test("page questionStartIndex, Issue#10523", () => {
+    const survey = new SurveyModel({
+      pages: [{
+        elements: [
+          {
+            type: "text",
+            name: "q1"
+          }] },
+      {
+        elements: [
+          {
+            type: "text",
+            name: "q2"
+          }] },
+      {
+        questionStartIndex: "A.1",
+        elements: [
+          {
+            type: "panel", name: "p1", title: "Panel",
+            elements: [
+              { type: "text", name: "q3" },
+              { type: "text", name: "q4" }
+            ]
+          },
+        ] },
+      { elements: [
+        { type: "text", name: "q5" },
+        {
+          type: "panel", name: "p2", title: "Panel",
+          elements: [
+            { type: "text", name: "q6" },
+            { type: "text", name: "q7" }
+          ]
+        }]
+      }],
+      showQuestionNumbers: "recursive",
+      questionStartIndex: "1.1"
+    });
+    expect(survey.pages[1].visibleIndex, "page2.visibleIndex, #1").toBe(1);
+    expect(survey.pages[1].num, "page2.num, #2").toBe(2);
+    expect(survey.pages[2].questionStartIndex, "questionStartIndex, #1").toBe("A.1");
+    expect(survey.pages[2].visibleIndex, "page2.visibleIndex, #1").toBe(2);
+    expect(survey.pages[2].num, "page2.num, #2").toBe(1);
+    expect(survey.pages[3].visibleIndex, "page3.visibleIndex, #1").toBe(3);
+    expect(survey.pages[3].num, "page3.num, #1").toBe(2);
+    const q1 = survey.getQuestionByName("q1");
+    const q2 = survey.getQuestionByName("q2");
+    const q3 = survey.getQuestionByName("q3");
+    const q4 = survey.getQuestionByName("q4");
+    const q5 = survey.getQuestionByName("q5");
+    const q6 = survey.getQuestionByName("q6");
+    const q7 = survey.getQuestionByName("q7");
+    const p1 = survey.getPanelByName("p1");
+    const p2 = survey.getPanelByName("p2");
+
+    expect(q1.no, "q1, #1").toBe("1.1");
+    expect(q2.no, "q2, #1").toBe("2.1");
+    expect(p1.no, "panel1, #1").toBe("A.1");
+    expect(q3.no, "q3, #1").toBe("A.1.1");
+    expect(q4.no, "q4, #1").toBe("A.1.2");
+    expect(q5.no, "q5, #1").toBe("B.1");
+    expect(p2.no, "panel2, #1").toBe("B.2");
+    expect(q6.no, "q6, #1").toBe("B.2.1");
+    expect(q7.no, "q7, #1").toBe("B.2.2");
+  });
+  test("Panel/Page getPanelInDesignMode", () => {
+    expect(new PageModel("p1").getPanelInDesignMode(), "page returns null").toBeFalsy();
+    expect(new PanelModel("p1").getPanelInDesignMode().name, "panel returns itself").toBe("p1");
+  });
+  test("Do not create footerActions array on creating&loading", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "panel", name: "panel1", elements: [{ type: "text", name: "q1" }] }
+      ]
+    });
+    const panel = survey.getPanelByName("panel1");
+    expect(panel.getPropertyValue("footerActions"), "footerActions array is not created").toBeUndefined();
+  });
+  test("Do not create gridLayoutColumns array on creating&loading/serializing", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "panel", name: "panel1", elements: [{ type: "text", name: "q1" }] }
+      ]
+    });
+    const panel = survey.getPanelByName("panel1");
+    expect(panel.getPropertyValue("gridLayoutColumns"), "gridLayoutColumns array is not created on loading").toBeUndefined();
+    expect(panel.toJSON().name).toBe("panel1");
+    expect(panel.getPropertyValue("gridLayoutColumns"), "gridLayoutColumns array is not created on serializing").toBeUndefined();
+  });
+  test("Required Validation Errors should not appear for Read-only Panels Bug#11136", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "panel", name: "panel1", isRequired: true, readOnly: true, elements: [{ type: "text", name: "q1" }] }
+      ]
+    });
+    const panel = survey.getPanelByName("panel1");
+    expect(survey.validate(), "Survey is valid when panel is read-only and required").toBe(true);
+    expect(panel.errors.length, "There should be no errors on the panel").toBe(0);
+  });
+  test("Page.requiredIf - required error should disappear after the condition becomes false, Bug#11285", () => {
+    const survey = new SurveyModel({
+      pages: [
+        {
+          name: "page1",
+          elements: [
+            { type: "radiogroup", name: "question1", choices: ["Item 1", "Item 2", "Item 3"] }
+          ]
+        },
+        {
+          name: "page2",
+          requiredIf: "{question1} = 'Item 1'",
+          elements: [
+            { type: "text", name: "question2" }
+          ]
+        }
+      ]
+    });
+    survey.setValue("question1", "Item 1");
+    survey.nextPage();
+    const page2 = survey.pages[1];
+    expect(page2.isRequired, "page2 should be required when question1 = 'Item 1'").toBe(true);
+    survey.tryComplete();
+    expect(page2.errors.length, "page2 should have a required error").toBe(1);
+    survey.prevPage();
+    survey.setValue("question1", "Item 2");
+    expect(page2.isRequired, "page2 should not be required when question1 = 'Item 2'").toBe(false);
+    expect(page2.errors.length, "page2 error should disappear after condition becomes false, Bug#11285").toBe(0);
+  });
+
+  test("panel.isContentVisible is updated on child visibility changes", () => {
+    const survey = new SurveyModel({
+      elements: [
+        { type: "text", name: "q1" },
+        {
+          type: "panel", name: "panel1",
+          elements: [
+            { type: "text", name: "q2", visibleIf: "{q1} = 'a'" },
+            { type: "text", name: "q3", visible: false }
+          ]
+        }
+      ]
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    const q3 = survey.getQuestionByName("q3");
+    expect(panel.renderedIsContentVisible, "all children are invisible").toBe(false);
+    expect(panel.isVisible, "panel is invisible").toBe(false);
+
+    survey.setValue("q1", "a");
+    expect(panel.renderedIsContentVisible, "q2 becomes visible via condition").toBe(true);
+    expect(panel.isVisible, "panel becomes visible").toBe(true);
+
+    survey.setValue("q1", "b");
+    expect(panel.renderedIsContentVisible, "q2 becomes invisible via condition").toBe(false);
+    expect(panel.isVisible, "panel becomes invisible again").toBe(false);
+
+    q3.visible = true;
+    expect(panel.renderedIsContentVisible, "q3 becomes visible directly").toBe(true);
+    q3.visible = false;
+    expect(panel.renderedIsContentVisible, "q3 becomes invisible directly").toBe(false);
+
+    survey.showInvisibleElements = true;
+    expect(panel.renderedIsContentVisible, "showInvisibleElements is on").toBe(true);
+    survey.showInvisibleElements = false;
+    expect(panel.renderedIsContentVisible, "showInvisibleElements is off").toBe(false);
+
+    const q4 = new QuestionTextModel("q4");
+    panel.addElement(q4);
+    expect(panel.renderedIsContentVisible, "a visible question is added").toBe(true);
+    panel.removeElement(q4);
+    expect(panel.renderedIsContentVisible, "the visible question is removed").toBe(false);
+  });
+});
+
+describe("Container visibility: childVisibilityChanged compares the stored isVisible", () => {
+  const countOnVisibleChanged = (container: any): { count: number } => {
+    const res = { count: 0 };
+    const prev = container.onVisibleChanged;
+    container.onVisibleChanged = function () {
+      res.count++;
+      return prev.call(this);
+    };
+    return res;
+  };
+  const hiddenPageJson = {
+    pages: [
+      { name: "p1", elements: [{ type: "text", name: "q1" }] },
+      { name: "p2", visible: false, elements: [{ type: "text", name: "q2" }, { type: "text", name: "q3" }] }
+    ]
+  };
+  test("Design mode: a page with visible: false does not run onVisibleChanged when a child's visible changes", () => {
+    const survey = new SurveyModel();
+    survey.setDesignMode(true);
+    survey.fromJSON(hiddenPageJson);
+    const page = survey.getPageByName("p2");
+    let pageEvents = 0;
+    survey.onPageVisibleChanged.add(() => pageEvents++);
+    survey.onPanelVisibleChanged.add(() => pageEvents++);
+    const counter = countOnVisibleChanged(page);
+    expect(page.isVisible, "isVisible after loading").toBe(true);
+    const q2 = survey.getQuestionByName("q2");
+    q2.visible = false;
+    expect(page.isVisible, "isVisible after hiding q2").toBe(true);
+    q2.visible = true;
+    expect(page.isVisible, "isVisible after showing q2").toBe(true);
+    expect(counter.count, "page onVisibleChanged calls").toBe(0);
+    expect(pageEvents, "onPageVisibleChanged / onPanelVisibleChanged").toBe(0);
+  });
+  test("showInvisibleElements: a page and a panel with visible: false do not run onVisibleChanged when a child's visible changes", () => {
+    const survey = new SurveyModel();
+    survey.showInvisibleElements = true;
+    survey.fromJSON({
+      pages: [
+        { name: "p1", elements: [{ type: "panel", name: "panel1", visible: false, elements: [{ type: "text", name: "q4" }, { type: "text", name: "q5" }] }] },
+        { name: "p2", visible: false, elements: [{ type: "text", name: "q2" }, { type: "text", name: "q3" }] }
+      ]
+    });
+    const page = survey.getPageByName("p2");
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    let events = 0;
+    survey.onPageVisibleChanged.add(() => events++);
+    survey.onPanelVisibleChanged.add(() => events++);
+    const pageCounter = countOnVisibleChanged(page);
+    const panelCounter = countOnVisibleChanged(panel);
+    expect(page.isVisible, "page isVisible after loading").toBe(true);
+    expect(panel.isVisible, "panel isVisible after loading").toBe(true);
+
+    const q2 = survey.getQuestionByName("q2");
+    q2.visible = false;
+    q2.visible = true;
+    expect(page.isVisible, "page isVisible after toggling q2").toBe(true);
+    expect(pageCounter.count, "page onVisibleChanged calls").toBe(0);
+
+    const q4 = survey.getQuestionByName("q4");
+    q4.visible = false;
+    q4.visible = true;
+    expect(panel.isVisible, "panel isVisible after toggling q4").toBe(true);
+    expect(panelCounter.count, "panel onVisibleChanged calls").toBe(0);
+    expect(events, "onPageVisibleChanged / onPanelVisibleChanged").toBe(0);
+  });
+  test("Design mode: loading does not walk the questions of a hidden page per child", () => {
+    const pages: Array<any> = [];
+    for (let i = 1; i <= 3; i++) {
+      const elements: Array<any> = [];
+      for (let j = 1; j <= 10; j++) elements.push({ type: "text", name: "q" + i + "_" + j });
+      pages.push({ name: "p" + i, visible: false, elements: elements });
+    }
+    const survey = new SurveyModel();
+    survey.setDesignMode(true);
+    // The questions are created inside fromJSON, so there is no instance to wrap before the load.
+    const spy = vi.spyOn(Question.prototype, "updateValueWithDefaults");
+    try {
+      survey.fromJSON({ pages: pages });
+      expect(survey.getAllQuestions().length, "questions").toBe(30);
+      expect(spy.mock.calls.length, "updateValueWithDefaults calls during fromJSON").toBeLessThanOrEqual(30);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  test("Runtime: hiding and showing the last visible question of a page changes the page's visibility", () => {
+    const survey = new SurveyModel({
+      pages: [
+        { name: "p1", elements: [{ type: "text", name: "q1" }] },
+        { name: "p2", elements: [{ type: "text", name: "q2" }] }
+      ]
+    });
+    const page = survey.getPageByName("p2");
+    const events: Array<string> = [];
+    survey.onPageVisibleChanged.add((_, options) => events.push(options.page.name + ":" + options.visible));
+    const q2 = survey.getQuestionByName("q2");
+    q2.visible = false;
+    expect(page.isVisible, "page isVisible after hiding q2").toBe(false);
+    expect(events, "events after hiding q2").toEqual(["p2:false"]);
+    q2.visible = true;
+    expect(page.isVisible, "page isVisible after showing q2").toBe(true);
+    expect(events, "events after showing q2").toEqual(["p2:false", "p2:true"]);
+  });
+  test("Runtime: a page hidden and shown by visibleIf clears values and restores defaults through the walk", () => {
+    const survey = new SurveyModel({
+      clearInvisibleValues: "onHiddenContainer",
+      pages: [
+        { name: "p1", elements: [{ type: "text", name: "a" }] },
+        { name: "p2", visibleIf: "{a} != 1", elements: [{ type: "text", name: "q2" }, { type: "text", name: "q3", defaultValue: "def" }] }
+      ]
+    });
+    const page = survey.getPageByName("p2");
+    survey.setValue("q2", "answer");
+    expect(survey.getValue("q3"), "q3 default after loading").toBe("def");
+    survey.setValue("a", 1);
+    expect(page.isVisible, "page isVisible, {a} = 1").toBe(false);
+    expect(survey.getValue("q2"), "q2 is cleared with its page").toBeUndefined();
+    expect(survey.getValue("q3"), "q3 is cleared with its page").toBeUndefined();
+    survey.setValue("a", 2);
+    expect(page.isVisible, "page isVisible, {a} = 2").toBe(true);
+    expect(survey.getValue("q3"), "q3 gets its default back").toBe("def");
+  });
+  test("Runtime: a panel hidden by visibleIf clears values with clearInvisibleValues: 'onHiddenContainer'", () => {
+    const survey = new SurveyModel({
+      clearInvisibleValues: "onHiddenContainer",
+      elements: [
+        { type: "text", name: "a" },
+        { type: "panel", name: "panel1", visibleIf: "{a} != 1", elements: [{ type: "text", name: "q2" }] }
+      ]
+    });
+    const panel = <PanelModel>survey.getPanelByName("panel1");
+    survey.setValue("q2", "answer");
+    survey.setValue("a", 1);
+    expect(panel.isVisible, "panel isVisible, {a} = 1").toBe(false);
+    expect(survey.getValue("q2"), "q2 is cleared with its panel").toBeUndefined();
+  });
+  test("Switching showInvisibleElements off and on: a page with visible: false follows it", () => {
+    const survey = new SurveyModel(hiddenPageJson);
+    survey.showInvisibleElements = true;
+    const page = survey.getPageByName("p2");
+    expect(page.isVisible, "isVisible, showInvisibleElements = true").toBe(true);
+    const events: Array<string> = [];
+    survey.onPageVisibleChanged.add((_, options) => events.push(options.page.name + ":" + options.visible));
+    survey.showInvisibleElements = false;
+    expect(page.isVisible, "isVisible, showInvisibleElements = false").toBe(false);
+    expect(events, "events after switching off").toEqual(["p2:false"]);
+    survey.showInvisibleElements = true;
+    expect(page.isVisible, "isVisible, showInvisibleElements = true again").toBe(true);
+    expect(events, "events after switching on").toEqual(["p2:false", "p2:true"]);
+  });
+  test("A row counts the UI components that render it and never goes below zero", () => {
+    const survey = new SurveyModel({ elements: [{ type: "text", name: "q1" }] });
+    const row = survey.currentPage.rows[0];
+    expect(row.changeUIMountCount(1), "the first component mounts").toBe(1);
+    expect(row.changeUIMountCount(1), "the second component mounts").toBe(2);
+    expect(row.changeUIMountCount(-1), "one component is left").toBe(1);
+    expect(row.changeUIMountCount(-1), "no component is left").toBe(0);
+    expect(row.changeUIMountCount(-1), "an extra unmount keeps zero").toBe(0);
+    expect(row.changeUIMountCount(1), "a new mount counts from zero").toBe(1);
+  });
+});

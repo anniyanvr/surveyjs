@@ -1,0 +1,1460 @@
+import { HashTable, Helpers } from "./helpers";
+import { ItemValue } from "./itemvalue";
+import { JsonObject, Serializer } from "./jsonobject";
+import { property } from "./decorators";
+import { Base } from "./base";
+import { SurveyError } from "./survey-error";
+import { getLocaleString } from "./surveyStrings";
+import { RequiredInAllRowsError, EachRowUniqueError } from "./error";
+import { QuestionFactory } from "./questionfactory";
+import { LocalizableString, ILocalizableOwner } from "./localizablestring";
+import { QuestionDropdownModel } from "./question_dropdown";
+import { IConditionObject, IQuestionPlainData } from "./question";
+import { settings } from "./settings";
+import { SurveyModel } from "./survey";
+import { toCssClasses } from "./utils/cssClassBuilder";
+import { ItemsByNameIndex } from "./utils/items-by-name-index";
+import { getMatrixCellAriaLabel, getMatrixTableBodyCss, getMatrixTableCss, getMatrixTableWrapperCss, isMatrixColumnsAutoWidth } from "./utils/matrix-table";
+import { IPlainDataOptions, ISaveToJSONOptions } from "./base-interfaces";
+import { ConditionRunner } from "./conditions/conditionRunner";
+import { Question, QuestionValueType, IVerifyDataContext, readOnlyViewEmptyText } from "./question";
+import { ISurveyData, ITextProcessor, IQuestion } from "./base-interfaces";
+import { IObjectValueContext, IValueGetterContext, IValueGetterContextGetValueParams, IValueGetterInfo, ValueGetterContextCore, VariableGetterContext } from "./conditions/conditionProcessValue";
+import { QuestionSingleInputBehavior } from "./question_singleinput_behavior";
+import { Scope } from "./utils/scope";
+
+export interface IMatrixData {
+  onMatrixRowChanged(row: MatrixRowModel): void;
+  getCorrectedRowValue(value: any): any;
+  getDisplayRowValue(value: any): string;
+  cellClick(row: MatrixRowModel, column: ItemValue): void;
+  isCellChecked(row: MatrixRowModel, column: ItemValue): boolean;
+  cssClasses: any;
+  isDisabledStyle: boolean;
+  isInputReadOnly: boolean;
+  isDisabledAttr: boolean;
+  isReadOnlyAttr: boolean;
+  hasErrorInRow(row: MatrixRowModel): boolean;
+}
+class MatrixRowValueGetterContext implements IValueGetterContext {
+  constructor(private row: MatrixRowModel) {}
+  public getObj(): Base { return this.row; }
+  public getValue(params: IValueGetterContextGetValueParams): IValueGetterInfo {
+    if (params.path.length !== 0) return undefined;
+    return { isFound: true, value: this.row.value, context: this };
+  }
+  public getTextValue(name: string, value: any, isDisplayValue: boolean): string {
+    if (!isDisplayValue) return value;
+    return this.row.getDisplayValue(value);
+  }
+}
+export class MatrixColumn extends ItemValue {
+  protected getBaseType(): string { return "matrixcolumn"; }
+  @property({ defaultValue: false }) isExclusive: boolean;
+}
+export class MatrixRowModel extends Base {
+  private data: IMatrixData;
+
+  constructor(
+    public item: ItemValue,
+    public fullName: string,
+    data: IMatrixData,
+    value: any
+  ) {
+    super();
+    this.data = data;
+    this.setValueDirectly(value);
+    if (this.data.hasErrorInRow(this)) {
+      this.hasError = true;
+    }
+  }
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+    if (name === "value" && !!this.data) {
+      this.data.onMatrixRowChanged(this);
+    }
+  }
+  public cellClick(column: ItemValue): void {
+    this.data.cellClick(this, column);
+  }
+  public isChecked(column: ItemValue): boolean {
+    return this.data.isCellChecked(this, column);
+  }
+  public get name(): string {
+    return this.item.value;
+  }
+  public get text(): string {
+    return this.item.text;
+  }
+  public get locText(): LocalizableString {
+    return this.item.locText;
+  }
+  public getOwner() {
+    return this.data;
+  }
+  public get isVisible(): boolean { return this.item.isVisible; }
+  public get value(): any {
+    return this.getPropertyValue("value");
+  }
+  public set value(val: any) {
+    if (!this.isReadOnly) {
+      this.setValueDirectly(this.data.getCorrectedRowValue(val));
+    }
+  }
+  public setValueDirectly(val: any): void {
+    this.setPropertyValue("value", val);
+  }
+  public getDisplayValue(val: any): string {
+    return this.data.getDisplayRowValue(val);
+  }
+  public get isReadOnly(): boolean { return !this.item.enabled || this.data.isInputReadOnly; }
+  public get isReadOnlyAttr(): boolean { return this.data.isReadOnlyAttr; }
+  public get isDisabledAttr(): boolean { return !this.item.enabled || this.data.isDisabledAttr; }
+  public get rowTextClasses(): string {
+    return toCssClasses(this.data.cssClasses.rowTextCell);
+  }
+  @property({ defaultValue: false }) hasError: boolean;
+  public get rowClasses(): string {
+    const cssClasses = (<any>this.data).cssClasses;
+    return toCssClasses(
+      cssClasses.row,
+      this.hasError && cssClasses.rowError,
+      this.isReadOnly && cssClasses.rowReadOnly,
+      this.data.isDisabledStyle && cssClasses.rowDisabled
+    );
+  }
+  public getValueGetterContext(): IValueGetterContext {
+    return new MatrixRowValueGetterContext(this);
+  }
+}
+
+export interface IMatrixCellsOwner extends ILocalizableOwner {
+  getRows(): Array<any>;
+  getColumns(): Array<any>;
+}
+
+export class MatrixCells extends Base {
+  private values: { [index: string]: any } = {};
+  private locs: { [index: string]: any } = {};
+  public constructor(public cellsOwner: IMatrixCellsOwner) {
+    super();
+  }
+  public getType(): string { return "cells"; }
+  public get isEmpty(): boolean {
+    return Object.keys(this.values).length == 0;
+  }
+  public onValuesChanged: () => void;
+  private locNotificationScope = new Scope();
+  private get locNotification(): boolean {
+    return this.locNotificationScope.isActive;
+  }
+  private valuesChanged(): void {
+    if (!this.locNotification && !!this.onValuesChanged) {
+      this.onValuesChanged();
+    }
+  }
+  public getCellDisplayLocText(row: any, column: any): LocalizableString {
+    return this.getCellLocCore(row, column);
+  }
+  private getCellLocCore(row: any, col: any): LocalizableString {
+    row = this.getCellRowColumnValue(row, this.rows);
+    col = this.getCellRowColumnValue(col, this.columns);
+    if (Helpers.isValueEmpty(row) || Helpers.isValueEmpty(col)) return null;
+    if (!this.locs[row]) {
+      this.locs[row] = {};
+    }
+    let res = <LocalizableString>this.locs[row][col];
+    if (!res) {
+      res = this.createString(row, col, (item: LocalizableString) => item.setJson(this.getCellLocData(row, col)));
+    }
+    return res;
+  }
+  private get defaultRowValue() { return settings.matrix.defaultRowName; }
+  private getCellLocData(row: any, col: any): any {
+    let data = this.getCellLocDataFromValue(row, col);
+    if (data) return data;
+    return this.getCellLocDataFromValue(this.defaultRowValue, col);
+  }
+  private getCellLocDataFromValue(row: any, column: any): any {
+    if (!this.values[row]) return null;
+    if (!this.values[row][column]) return null;
+    return this.values[row][column];
+  }
+  public getCellText(row: any, column: any): string {
+    var loc = this.getCellLocCore(row, column);
+    return loc ? loc.calculatedText : null;
+  }
+  public setCellText(row: any, column: any, val: string): void {
+    const loc = this.getCellLocCore(row, column);
+    if (loc) {
+      loc.text = val;
+    }
+  }
+  private updateValues(row: any, column: any, val: any): void {
+    if (val) {
+      if (!this.values[row])this.values[row] = {};
+      this.values[row][column] = val;
+      this.valuesChanged();
+    } else {
+      if (this.values[row] && this.values[row][column]) {
+        delete this.values[row][column];
+        if (Object.keys(this.values[row]).length == 0) {
+          delete this.values[row];
+        }
+        this.valuesChanged();
+      }
+    }
+  }
+  public getDefaultCellText(column: any): string {
+    var loc = this.getCellLocCore(this.defaultRowValue, column);
+    return loc ? loc.calculatedText : null;
+  }
+  public setDefaultCellText(column: any, val: string): void {
+    this.setCellText(this.defaultRowValue, column, val);
+  }
+  public getCellDisplayText(row: any, column: any): string {
+    var loc = this.getCellDisplayLocText(row, column);
+    return loc ? loc.calculatedText : null;
+  }
+  public get rows(): Array<any> {
+    return this.cellsOwner ? this.cellsOwner.getRows() : [];
+  }
+  public get columns(): Array<any> {
+    return this.cellsOwner ? this.cellsOwner.getColumns() : [];
+  }
+  private getCellRowColumnValue(val: any, values: Array<any>): any {
+    if (val === null || val === undefined) return null;
+    if (typeof val == "number") {
+      if (val < 0 || val >= values.length) return null;
+      val = values[val].value;
+    }
+    if (val.value) return val.value;
+    return val;
+  }
+  public getJson(options?: ISaveToJSONOptions): any {
+    if (this.isEmpty) return null;
+    if (options?.storeLocaleStrings === false) return null;
+    const defaultRow = this.values[this.defaultRowValue];
+    const res: { [index: string]: any } = {};
+    for (let row in this.values) {
+      const resRow: { [index: string]: any } = {};
+      const rowValues = this.values[row];
+      for (let col in rowValues) {
+        if (row === this.defaultRowValue || !defaultRow || defaultRow[col] !== rowValues[col]) {
+          const loc = this.getCellLocCore(row, col);
+          resRow[col] = !!loc ? loc.getJson(options) : rowValues[col];
+        }
+      }
+      res[row] = resRow;
+    }
+    return res;
+  }
+  public setJson(value: any, isLoading?: boolean): void {
+    this.values = {};
+    if (!!value) {
+      for (var row in value) {
+        if (row == "pos") continue;
+        var rowValues = value[row];
+        this.values[row] = {};
+        for (var col in rowValues) {
+          if (col == "pos") continue;
+          this.values[row][col] = rowValues[col];
+        }
+      }
+    }
+    this.locNotificationScope.run(() => {
+      this.runFuncOnLocs((row: any, col: any, loc: LocalizableString) => loc.setJson(this.getCellLocData(row, col)));
+    });
+    this.valuesChanged();
+  }
+  public mergeWith(otherCells: MatrixCells, locales?: Array<string>): void {
+    this.locNotificationScope.run(() => {
+      const options: ISaveToJSONOptions = { locales: locales, storeLocaleStrings: true };
+      for (let row in otherCells.values) {
+        const rowValues = otherCells.values[row];
+        for (let col in rowValues) {
+          const otherLoc = otherCells.getCellLocCore(row, col);
+          if (!!otherLoc) {
+            let loc = this.getCellLocCore(row, col);
+            if (!loc) {
+              loc = this.createString(row, col, (item: LocalizableString) => item.setJson(otherLoc.getJson(options)));
+            } else {
+              loc.mergeWith(otherLoc, locales);
+            }
+          }
+        }
+      }
+    });
+    this.onValuesChanged();
+  }
+  public locStrsChanged(): void {
+    this.runFuncOnLocs((row: any, col: any, loc: LocalizableString) => loc.strChanged());
+  }
+  private runFuncOnLocs(func: (row: any, col: any, loc: LocalizableString) => void): void {
+    for (let row in this.locs) {
+      const rowValues = this.locs[row];
+      for (let col in rowValues) {
+        func(row, col, rowValues[col]);
+      }
+    }
+  }
+  protected createString(row: string, col: string, onCreate: (item: LocalizableString) => void): LocalizableString {
+    const res = new LocalizableString(this.cellsOwner, true);
+    onCreate(res);
+    res.onGetTextCallback = (str: string): string => {
+      if (!str) {
+        const column = ItemValue.getItemByValue(this.columns, col);
+        if (column) {
+          return column.locText.getJson() || column.value;
+        }
+      }
+      return str;
+    };
+    res.onStrChanged = (oldValue: any, newValue: any): void => {
+      this.updateValues(row, col, newValue);
+    };
+    this.locs[row][col] = res;
+    return res;
+  }
+}
+
+export class MatrixValueGetterContext extends ValueGetterContextCore {
+  // findRow: the question's row lookup by name, which it keeps private.
+  constructor (protected question: QuestionMatrixModel, private findRow: (name: string) => MatrixRowModel) {
+    super();
+  }
+  public getObj(): Base { return this.question; }
+  public getValue(params: IValueGetterContextGetValueParams): IValueGetterInfo {
+    if (params.path.length > 0) {
+      const res = super.getValue(params);
+      if (res && res.isFound) return res;
+    }
+    return new VariableGetterContext(this.question.value).getValue(params);
+  }
+  getRootObj(): IObjectValueContext { return <any>this.question.data; }
+  protected updateValueByItem(name: string, res: IValueGetterInfo): void {
+    const row = this.findRow(name);
+    if (!!row) {
+      res.isFound = true;
+      res.obj = row;
+      res.context = row.getValueGetterContext();
+    }
+  }
+}
+
+/**
+  * A class that describes the Single-Select Matrix question type.
+  *
+  * [View Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+  */
+export class QuestionMatrixModel
+  extends Question
+  implements IMatrixData, IMatrixCellsOwner {
+  protected generatedVisibleRows: Array<MatrixRowModel> = null;
+  public visibleRowsChangedCallback: () => void;
+  private isRowChanging = false;
+  private cellsValue: MatrixCells;
+
+  protected createColumnValues(): any {
+    return this.createItemValues("columns");
+  }
+
+  constructor(name: string) {
+    super(name);
+    this.columns = this.createColumnValues();
+    this.rows = this.createItemValues("rows");
+    this.cellsValue = new MatrixCells(this);
+    this.cellsValue.onValuesChanged = () => {
+      this.updateHasCellText();
+      this.propertyValueChanged("cells", this.cells, this.cells);
+    };
+  }
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+    if (name === "rowsVisibleIf" || name === "columnsVisibleIf") {
+      this.runCondition(this.getDataFilteredProperties());
+    }
+    if (name === "columns") {
+      this.onColumnsChanged();
+    }
+    if (name === "rows") {
+      this.executeOnSyncPropertiesChanged(() => {
+        this.rows = this.sortVisibleRows(this.rows);
+        this.runCondition(this.getDataFilteredProperties());
+        this.onRowsChanged();
+      });
+    }
+    if (name === "hideIfRowsEmpty") {
+      this.updateVisibilityBasedOnRows();
+    }
+    if (name === "cellType") {
+      this.value = this.convertToCorrectValue(this.value);
+    }
+    if (name === "rowOrder") {
+      this.onRowsChanged();
+    }
+  }
+  public getType(): string {
+    return "matrix";
+  }
+  protected get supportsQuestionView(): boolean {
+    return false;
+  }
+  /**
+   * Specifies whether to display the table header that contains column captions.
+   *
+   * Default value: `true`
+   */
+  @property() showHeader: boolean;
+  /**
+   * An array of matrix columns.
+   *
+   * For a Single-Select Matrix, the `columns` array can contain configuration objects with the `text` (display value) and `value` (value to be saved in survey results) properties. Alternatively, the array can contain primitive values that will be used as both the display values and values to be saved in survey results.
+   *
+   * [Single-Select Matrix Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+   *
+   * For a Multi-Select Matrix or Dynamic Matrix, the `columns` array should contain configuration objects with properties described in the [`MatrixDropdownColumn`](https://surveyjs.io/form-library/documentation/api-reference/multi-select-matrix-column-values) API Reference section.
+   *
+   * [Multi-Select Matrix Demo](https://surveyjs.io/form-library/examples/questiontype-matrixdropdown/ (linkStyle))
+   */
+  @property() columns: Array<any>;
+  public get visibleColumns(): Array<any> {
+    const res: Array<any> = [];
+    this.columns.forEach(col => { if (this.isColumnVisible(col)) { res.push(col); } });
+    return res;
+  }
+  protected isColumnVisible(column: any): boolean {
+    return column.isVisible;
+  }
+  /**
+   * An array of matrix rows.
+   *
+   * This array can contain primitive values or objects with the `text` (display value) and `value` (value to be saved in survey results) properties.
+   *
+   * [Single-Select Matrix Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+   *
+   * [Multi-Select Matrix Demo](https://surveyjs.io/form-library/examples/multi-select-matrix-question/ (linkStyle))
+   */
+  @property() rows: Array<any>;
+  /**
+   * A Boolean expression that is evaluated against each matrix row. If the expression evaluates to `false`, the row becomes hidden.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Use the `{item}` placeholder to reference the current row in the expression.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/change-visibility-of-rows-in-matrix-table/ (linkStyle))
+   * @see visibleRows
+   * @see columnsVisibleIf
+   */
+  @property() rowsVisibleIf: string;
+  /**
+   * A Boolean expression that is evaluated against each matrix column. If the expression evaluates to `false`, the column becomes hidden.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Use the `{item}` placeholder to reference the current column in the expression.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/change-visibility-of-rows-in-matrix-table/ (linkStyle))
+   * @see rowsVisibleIf
+   */
+  @property() columnsVisibleIf: string;
+  protected onColumnsChanged(): void {
+    this.resetSingleInputQuestions();
+  }
+  protected updateVisibilityBasedOnRows(): void {
+    if (this.hideIfRowsEmpty) {
+      this.onVisibleChanged();
+    }
+  }
+  protected isVisibleCore(): boolean {
+    const res = super.isVisibleCore();
+    if (!res || !this.hideIfRowsEmpty) return res;
+    return this.visibleRows?.length > 0;
+  }
+  protected shouldRunColumnExpression(): boolean {
+    return !this.survey || !this.survey.areInvisibleElementsShowing;
+  }
+  protected runItemsCondition(properties: HashTable<any>): void {
+    const hasRowsChanged = this.runConditionsForRows(properties);
+    const hasColumnsChanged = this.runConditionsForColumns(properties);
+    const hasChanges = hasColumnsChanged || hasRowsChanged;
+    if (hasChanges) {
+      if (this.isClearValueOnHidden && hasColumnsChanged) {
+        this.clearInvisibleColumnValues();
+      }
+      this.clearGeneratedRows();
+      if (hasColumnsChanged) {
+        this.onColumnsChanged();
+      }
+      this.onRowsChanged();
+    }
+  }
+  protected clearGeneratedRows(): void {
+    this.generatedVisibleRows = null;
+  }
+  private runConditionsForRows(properties: HashTable<any>): boolean {
+    const showInvisibile = this.areInvisibleElementsShowing;
+    const runner = !showInvisibile ? this.createRowsVisibleIfRunner() : null;
+    const hasChanged = ItemValue.runConditionsForItems(this.rows, undefined, runner,
+      properties, !showInvisibile);
+    ItemValue.runEnabledConditionsForItems(this.rows, undefined, properties);
+    return hasChanged;
+  }
+  protected runConditionsForColumns(properties: HashTable<any>): boolean {
+    const useColumnsExpression = !this.areInvisibleElementsShowing;
+    const expression = this.getExpressionFromSurvey("columnsVisibleIf");
+    const runner = useColumnsExpression && !!expression ? new ConditionRunner(expression) : null;
+    return ItemValue.runConditionsForItems(this.columns, undefined, runner, properties, this.shouldRunColumnExpression());
+  }
+  public needResponsiveWidth() {
+    //TODO: make it mor intelligent
+    return true;
+  }
+
+  protected get columnsAutoWidth() {
+    return isMatrixColumnsAutoWidth(this.isMobile, this.columns);
+  }
+  public getTableCss(): string {
+    return getMatrixTableCss(this.cssClasses, this.columnsAutoWidth, this.showHeader, this.verticalAlign);
+  }
+  public getTableBodyCss(): string {
+    return getMatrixTableBodyCss(this.cssClasses, this.alternateRows, this.isMobile);
+  }
+  public getTableWrapperCss(): string {
+    return getMatrixTableWrapperCss(this.cssClasses, this.titleLocation);
+  }
+
+  /**
+   * Aligns matrix cell content in the vertical direction.
+   */
+  @property() verticalAlign: "top" | "middle";
+
+  /**
+   * Specifies whether to apply shading to alternate matrix rows.
+   *
+   * [Single-Select Matrix Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+   */
+  @property() alternateRows: boolean;
+
+  /**
+   * Minimum column width in CSS values.
+   *
+   * [Multi-Select Matrix Demo](https://surveyjs.io/form-library/examples/multi-select-matrix-question/ (linkStyle))
+   *
+   * [Dynamic Matrix Demo](https://surveyjs.io/form-library/examples/dynamic-matrix-add-new-rows/ (linkStyle))
+   * @see width
+   */
+  @property({ returnValue: "" }) columnMinWidth: string;
+
+  /**
+   * A width for the column that displays row titles (first column). Accepts CSS values.
+   */
+  @property({ returnValue: "" }) rowTitleWidth: string;
+  /**
+   * Specifies how to arrange matrix questions.
+   *
+   * Possible values:
+   *
+   * - `"table"` - Displays matrix questions in a table.
+   * - `"list"` - Displays matrix questions one under another as a list.
+   * - `"auto"` (default) - Uses the `"table"` mode if the survey has sufficient width to fit the table or the `"list"` mode otherwise.
+   */
+  @property() displayMode: "auto" | "table" | "list";
+
+  //a11y
+  public getCellAriaLabel(row: any, column: any, directRowTitle?: string): string {
+    return getMatrixCellAriaLabel(this.getLocalizationString("matrix_row"), this.getLocalizationString("matrix_column"), row, column, directRowTitle);
+  }
+
+  public get isNewA11yStructure(): boolean {
+    return true;
+  }
+  // EO a11y
+  protected getIsMobile(): boolean {
+    if (this.displayMode == "auto") return super.getIsMobile();
+    return this.displayMode === "list";
+  }
+  public get isAllowTitleLeft(): boolean {
+    return false;
+  }
+  public getValueType(): QuestionValueType {
+    return "object";
+  }
+  protected getAllChildren(): Base[] {
+    return [
+      ...super.getAllChildren(),
+      ...this.columns,
+      ...this.rows,
+    ];
+  }
+  /**
+   * Specifies the type of matrix cells.
+   *
+   * Possible values:
+   *
+   * - `"radio"` (default)
+   * - `"checkbox"`
+   *
+   * [Radio-Button Matrix Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+   *
+   * [Checkbox Matrix Demo](https://surveyjs.io/form-library/examples/checkbox-matrix-question/ (linkStyle))
+   */
+  @property({ onSetting: (val: string) => val !== "checkbox" ? "radio" : val }) cellType: string;
+  public get isMultiSelect(): boolean {
+    return this.cellType === "checkbox";
+  }
+  /**
+   * The name of a component used to render cells.
+   */
+  @property() cellComponent: string;
+  public get hasSingleInput(): boolean {
+    return false;
+  }
+  /**
+   * Specifies whether each row requires an answer. If a respondent skips a row, the question displays a validation error.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/single-selection-matrix-table-question/ (linkStyle))
+   * @see isRequired
+   * @see eachRowUnique
+   * @see validators
+   * @since 2.0.0
+   */
+  @property() eachRowRequired: boolean;
+  /**
+   * @deprecated Use the [`eachRowRequired`](https://surveyjs.io/form-library/documentation/api-reference/matrix-table-question-model#eachRowRequired) property instead.
+   * @hidden
+   */
+  public get isAllRowRequired(): boolean {
+    return this.eachRowRequired;
+  }
+  public set isAllRowRequired(val: boolean) {
+    this.eachRowRequired = val;
+  }
+  /**
+   * Specifies whether answers in all rows should be unique. If any answers duplicate, the question displays a validation error.
+   * @see eachRowRequired
+   * @see validators
+   */
+  @property() eachRowUnique: boolean;
+  public get hasRows(): boolean {
+    return this.rows.length > 0;
+  }
+  /**
+   * Specifies a sort order for matrix rows.
+   *
+   * Possible values:
+   *
+   * - `"initial"` (default) - Preserves the original order of the `rows` array.
+   * - `"random"` - Arranges matrix rows in random order each time the question is displayed.
+   * @see rows
+   * @since 2.0.0
+   */
+  @property({ isLowerCase: true }) rowOrder: string;
+  /**
+   * @deprecated Use the [`rowOrder`](https://surveyjs.io/form-library/documentation/api-reference/matrix-table-question-model#rowOrder) property instead.
+   * @hidden
+   */
+  public get rowsOrder(): string {
+    return this.rowOrder;
+  }
+  public set rowsOrder(val: string) {
+    this.rowOrder = val;
+  }
+  /**
+   * Specifies whether to hide the question when the matrix has no visible rows.
+   * @see rowsVisibleIf
+   */
+  @property() hideIfRowsEmpty: boolean;
+
+  getRows(): Array<any> {
+    return this.rows;
+  }
+  getColumns(): Array<any> {
+    return this.visibleColumns;
+  }
+  public addColumn(value: any, text?: string): MatrixColumn {
+    var col = new MatrixColumn(value, text);
+    this.columns.push(col);
+    return col;
+  }
+  public get checkType(): string { return this.isMultiSelect ? "checkbox" : "radio"; }
+  // Single-select view mode uses the same checkmarks as preview.
+  private get isCheckmarkStyle(): boolean {
+    return this.isPreviewStyle || (!this.isMultiSelect && this.isViewMode);
+  }
+  private formatCss(val: string) : string {
+    return (val || "").replace("{type}", this.checkType);
+  }
+  public get emptyCellCss() {
+    return toCssClasses(this.cssClasses.cell, this.cssClasses.emptyCell);
+  }
+  public getItemClass(row: any, column: any): string {
+    const isChecked = row.isChecked(column);
+    const isDisabled = this.isReadOnly;
+    const allowHover = !isDisabled && !(!!this.survey && this.survey.isDesignMode);
+    const hasCellText = this.hasCellText;
+    const css = this.cssClasses;
+    const checkmarkStyle = this.isCheckmarkStyle;
+    return toCssClasses(
+      hasCellText && css.cell,
+      hasCellText ? css.cellText : this.formatCss(css.label),
+      !hasCellText && (this.eachRowRequired || this.eachRowUnique ? row.hasError : this.hasCssError()) && css.itemOnError,
+      isChecked && (hasCellText ? css.cellTextSelected : this.formatCss(css.itemChecked)),
+      this.isDisabledStyle && (hasCellText ? css.cellTextDisabled : this.formatCss(css.itemDisabled)),
+      this.isReadOnlyStyle && !checkmarkStyle && (hasCellText ? css.cellTextReadOnly : this.formatCss(css.itemReadOnly)),
+      checkmarkStyle && (hasCellText ? css.cellTextPreview : this.formatCss(css.itemPreview)),
+      allowHover && !hasCellText && this.formatCss(css.itemHover)
+    );
+  }
+  public get itemSvgIcon(): string {
+    if (this.isCheckmarkStyle && this.cssClasses.itemPreviewSvgIconId) {
+      return this.cssClasses.itemPreviewSvgIconId;
+    }
+    return this.cssClasses.itemSvgIconId;
+  }
+  public getItemSvgIcon(row: any, column: any): string {
+    if (this.isMultiSelect && row.isChecked(column)) return this.cssClasses.itemPreviewSvgIconId;
+    return this.itemSvgIcon;
+  }
+  public getCellViewText(row: MatrixRowModel, column: ItemValue): string {
+    if (this.isMobile || !this.isViewMode || this.isMultiSelect || this.hasCellText || row.isChecked(column)) return "";
+    return readOnlyViewEmptyText;
+  }
+  public get cssItemValue(): string {
+    return this.formatCss(this.cssClasses.itemValue);
+  }
+  public get cssMaterialDecorator(): string {
+    return this.formatCss(this.cssClasses.materialDecorator);
+  }
+  public get cssItemDecorator(): string {
+    return this.formatCss(this.cssClasses.itemDecorator);
+  }
+  public locStrsChanged(): void {
+    super.locStrsChanged();
+    this.cells.locStrsChanged();
+  }
+  protected getQuizQuestionCount() {
+    var res = 0;
+    for (var i = 0; i < this.rows.length; i++) {
+      if (!this.isValueEmpty(this.correctAnswer[this.rows[i].value])) res++;
+    }
+    return res;
+  }
+  protected convertToCorrectValue(val: any) {
+    if (val === undefined || val === null || typeof val !== "object") return val;
+    const keys = Object.keys(val);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const obj = val[key];
+      if (Array.isArray(obj) && !this.isMultiSelect) {
+        if (obj.length > 0) {
+          val[key] = obj[0];
+        } else {
+          delete val[key];
+        }
+      }
+      if (!Array.isArray(obj) && this.isMultiSelect) {
+        val[key] = [obj];
+      }
+    }
+    return val;
+  }
+  protected getCorrectAnswerCount(): number {
+    var res = 0;
+    var value = this.value;
+    for (var i = 0; i < this.rows.length; i++) {
+      var row = this.rows[i].value;
+      if (
+        !this.isValueEmpty(value[row]) &&
+        this.isTwoValueEquals(this.correctAnswer[row], value[row])
+      )
+        res++;
+    }
+    return res;
+  }
+  protected runConditionCore(properties: HashTable<any>): void {
+    ItemValue.runEnabledConditionsForItems(this.rows, undefined, properties);
+    super.runConditionCore(properties);
+    this.runItemsCondition(properties);
+  }
+  protected createRowsVisibleIfRunner(): ConditionRunner {
+    const expression = this.getExpressionFromSurvey("rowsVisibleIf");
+    return !!expression ? new ConditionRunner(expression) : null;
+  }
+  protected onRowsChanged(): void {
+    this.clearGeneratedRows();
+    this.resetSingleInputQuestions();
+    this.updateVisibilityBasedOnRows();
+    this.fireCallback(this.visibleRowsChangedCallback);
+    this.resetSurveyProgressTotal();
+  }
+  // The row questions of the single-input mode are built from visibleRows and visibleColumns, so a
+  // rowsVisibleIf / columnsVisibleIf that changes either makes them stale. resetSingleInput() drops
+  // them together with the single input that may point to one of them.
+  private resetSingleInputQuestions(): void {
+    if (!!this.nestedQuestionsValue) {
+      this.resetSingleInput();
+    }
+  }
+  public getMatrixRows(): Array<MatrixRowModel> {
+    if (!!this.generatedVisibleRows) return this.generatedVisibleRows;
+    const result = new Array<MatrixRowModel>();
+    let val = this.value;
+    if (!val) val = {};
+    const rows = this.rows;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.hasValue) continue;
+      const rowId = this.renderedId + "_" + row.value.toString().replace(/\s/g, "_");
+      result.push(this.createMatrixRow(row, rowId, val[row.value]));
+    }
+    this.generatedVisibleRows = result;
+    return result;
+  }
+  /* The rows by name, built from one getMatrixRows() array: it is rebuilt when that array changes or a row
+     is renamed in place (itemValuePropertyChanged). A row whose item lost its value after the rows were
+     built has a null name and answers "", as the lookup always did. */
+  private rowsByNameIndex = new ItemsByNameIndex<MatrixRowModel>(row => row.name?.toString() || "");
+  private getMatrixRowByName(name: string): MatrixRowModel {
+    return this.rowsByNameIndex.find(this.getMatrixRows(), name);
+  }
+  public itemValuePropertyChanged(item: ItemValue, name: string, oldValue: any, newValue: any): void {
+    // Reset before super: it fires onItemValuePropertyChanged, and a listener may look up the renamed row.
+    if (name === "value" && item.ownerPropertyName === "rows") {
+      this.rowsByNameIndex.reset();
+    }
+    super.itemValuePropertyChanged(item, name, oldValue, newValue);
+  }
+  protected getVisibleRows(): Array<MatrixRowModel> {
+    const rows = [];
+    this.getMatrixRows().forEach(row => {
+      if (row.isVisible) {
+        rows.push(row);
+      }
+    });
+    return rows;
+  }
+  private nestedQuestionsValue: Array<Question>;
+  public getMatrixSingleInputQuestions(question: Question, checkDynamic: boolean): Array<Question> {
+    if (!!this.nestedQuestionsValue) return this.nestedQuestionsValue;
+    const res: Array<Question> = [];
+    const qType = this.isMultiSelect ? "checkbox" : "radiogroup";
+    this.visibleRows.forEach(row => {
+      const question = <Question>Serializer.createClass(qType);
+      question.name = row.name;
+      question.locTitle.sharedData = row.locText;
+      question.choices = this.visibleColumns;
+      question.value = row.value;
+      question.isRequired = this.eachRowRequired;
+      question.setSurveyImpl(this);
+      question.setParentQuestion(this);
+      res.push(question);
+    });
+    this.nestedQuestionsValue = res;
+    return res;
+  }
+  private disposeNestedQuestions(): void {
+    if (this.nestedQuestionsValue) {
+      this.nestedQuestionsValue.forEach(q => q.dispose());
+      this.nestedQuestionsValue = null;
+    }
+  }
+  private getRowByName(name: string): MatrixRowModel {
+    const rows = this.visibleRows;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].name === name) return rows[i];
+    }
+    return null;
+  }
+  protected createSingleInputBehavior(): QuestionSingleInputBehavior {
+    return new MatrixSingleInputBehavior(this);
+  }
+  public resetSingleInput(): void {
+    this.disposeNestedQuestions();
+    super.resetSingleInput();
+  }
+  public dispose(): void {
+    this.disposeNestedQuestions();
+    super.dispose();
+  }
+  //#region For simple radiogroup questions setSurveyImpl
+  getSurveyData(): ISurveyData { return this; }
+  getTextProcessor(): ITextProcessor { return this.surveyImpl?.getTextProcessor(); }
+  getValue(name: string): any {
+    const row = this.getRowByName(name);
+    return !!row ? row.value : undefined;
+  }
+  setValue(name: string, newValue: any): any {
+    this.getRowByName(name).value = newValue;
+  }
+  getComment(name: string): string { return this.data?.getComment(name); }
+  setComment(name: string, newValue: string, locNotification: boolean | "text"): any { this.data?.setComment(name, newValue, locNotification); }
+  getFilteredProperties(): any { return this.data?.getFilteredProperties(); }
+  findQuestionByName(name: string): IQuestion { return this.data?.findQuestionByName(name); }
+  //#endregion
+  protected sortVisibleRows(array: Array<MatrixRowModel>): Array<MatrixRowModel> {
+    if (!!this.survey && this.survey.isDesignMode)
+      return array;
+    var order = this.rowOrder.toLowerCase();
+    if (order === "random")
+      return Helpers.randomizeArray<MatrixRowModel>(array, this.randomSeed);
+    return array;
+  }
+  public randomSeedChanged(): void {
+    if (this.rowOrder.toLowerCase() !== "random") return;
+    this.rows = this.sortVisibleRows(this.rows);
+    this.onRowsChanged();
+  }
+  endLoadingFromJson(): void {
+    super.endLoadingFromJson();
+    this.updateVisibilityBasedOnRows();
+    this.rows = this.sortVisibleRows(this.rows);
+    this.onRowsChanged();
+    this.onColumnsChanged();
+  }
+  protected isDataValueCorrect(val: any): boolean {
+    return Helpers.isValueObject(val, true);
+  }
+  // A single or multi select matrix has no nested question instances: the cell check is its own
+  // and runs against the columns, one finding per row, or per item of a multi select cell.
+  protected verifyValueCore(val: any, context: IVerifyDataContext): boolean {
+    if (!super.verifyValueCore(val, context)) return false;
+    const unknownKeys: Array<string> = [];
+    for (const key in val) {
+      if (!this.isValueKeyKnown(key)) {
+        unknownKeys.push(key);
+        continue;
+      }
+      // A row of another matrix that shares the value is checked by that matrix.
+      if (!this.hasValueKey(key) || !context.checks.reportInvalidChoiceValues) continue;
+      const cell = val[key];
+      const isArrayCell = this.isMultiSelect && Array.isArray(cell);
+      const cellValues = isArrayCell ? cell : [cell];
+      context.pushSegment(key);
+      cellValues.forEach((cellValue: any, index: number) => {
+        if (!!ItemValue.getItemByValue(this.columns, cellValue)) return;
+        context.addIssue("invalidChoiceValue", isArrayCell ? index : undefined, cellValue, this);
+      });
+      context.popSegment();
+    }
+    if (context.checks.reportUnknownProperties) {
+      unknownKeys.forEach(key => context.addIssue("unknownProperty", key, val[key], this));
+    }
+    return true;
+  }
+  protected hasValueKey(key: string): boolean {
+    return this.rows.some(row => row.value + "" === key);
+  }
+  /**
+   * Returns an array of visible matrix rows.
+   * @see rowsVisibleIf
+   */
+  public get visibleRows(): Array<MatrixRowModel> {
+    return this.getVisibleRows();
+  }
+  /**
+   * An array of matrix cells. Use this array to get or set cell values.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/questiontype-matrix-rubric/ (linkStyle))
+   */
+  public get cells(): MatrixCells {
+    return this.cellsValue;
+  }
+  public set cells(value: MatrixCells) {
+    this.cells.setJson(value && value.getJson ? value.getJson() : null);
+  }
+  protected isPropertyStoredInHash(name: string): boolean {
+    return name !== "cells" && super.isPropertyStoredInHash(name);
+  }
+  protected mergeLocalizationWithInnerObjects(src: Base, locales?: Array<string>): void {
+    if (src instanceof QuestionMatrixModel) {
+      (<any>this.cells).mergeWith(src.cells, locales);
+    }
+  }
+  public get hasCellText(): boolean {
+    return this.getPropertyValue("hasCellText", false);
+  }
+  protected updateHasCellText(): void {
+    this.setPropertyValue("hasCellText", !this.cells.isEmpty);
+  }
+  public setCellText(row: any, column: any, val: string) {
+    this.cells.setCellText(row, column, val);
+  }
+  public getCellText(row: any, column: any): string {
+    return this.cells.getCellText(row, column);
+  }
+  public setDefaultCellText(column: any, val: string) {
+    this.cells.setDefaultCellText(column, val);
+  }
+  public getDefaultCellText(column: any): string {
+    return this.cells.getDefaultCellText(column);
+  }
+  public getCellDisplayText(row: any, column: any): string {
+    return this.cells.getCellDisplayText(row, column);
+  }
+  private emptyLocalizableString = new LocalizableString(this);
+  public getCellDisplayLocText(row: any, column: any): LocalizableString {
+    var loc = this.cells.getCellDisplayLocText(row, column);
+    return loc ? loc : this.emptyLocalizableString;
+  }
+  supportAutoAdvance(): boolean {
+    return this.isMouseDown === true && this.hasValuesInAllRows();
+  }
+  private errorsInRow: HashTable<boolean>;
+  protected onCheckForErrors(errors: Array<SurveyError>, isOnValueChanged: boolean, fireCallback: boolean): void {
+    super.onCheckForErrors(errors, isOnValueChanged, fireCallback);
+    if (!isOnValueChanged || this.hasCssError()) {
+      const rowsErrors = { noValue: false, isNotUnique: false };
+      this.checkErrorsAllRows(fireCallback, rowsErrors);
+      if (rowsErrors.noValue) {
+        errors.push(new RequiredInAllRowsError(null, this));
+      }
+      if (rowsErrors.isNotUnique) {
+        errors.push(new EachRowUniqueError(null, this));
+      }
+    }
+  }
+  private hasValuesInAllRows(): boolean {
+    const rowsErrors = { noValue: false, isNotUnique: false };
+    this.checkErrorsAllRows(false, rowsErrors, true);
+    return !rowsErrors.noValue;
+  }
+  private checkErrorsAllRows(modifyErrors: boolean, res: { noValue: boolean, isNotUnique: boolean }, allRowsRequired?: boolean): void {
+    const rowsRequired = this.eachRowRequired || allRowsRequired;
+    const rowsUnique = this.eachRowUnique;
+    res.noValue = false;
+    res.isNotUnique = false;
+    if (modifyErrors) {
+      this.errorsInRow = undefined;
+    }
+    if (!rowsRequired && !rowsUnique) return;
+    const rows = this.visibleRows;
+    if (!rows) return;
+    const hash: HashTable<any> = {};
+    for (var i = 0; i < rows.length; i++) {
+      const val = rows[i].value;
+      let isEmpty = this.isValueEmpty(val);
+      const isNotUnique = rowsUnique && (!isEmpty && hash[val] === true);
+      isEmpty = isEmpty && rowsRequired;
+      if (modifyErrors && (isEmpty || isNotUnique)) {
+        this.addErrorIntoRow(rows[i]);
+      }
+      if (!isEmpty) {
+        hash[val] = true;
+      }
+      res.noValue = res.noValue || isEmpty;
+      res.isNotUnique = res.isNotUnique || isNotUnique;
+    }
+    if (modifyErrors) {
+      rows.forEach(row => {
+        row.hasError = this.hasErrorInRow(row);
+      });
+    }
+  }
+  private addErrorIntoRow(row: MatrixRowModel): void {
+    if (!this.errorsInRow)this.errorsInRow = {};
+    this.errorsInRow[row.name] = true;
+    row.hasError = true;
+  }
+  private refreshRowsErrors(): void {
+    if (!this.errorsInRow) return;
+    this.checkErrorsAllRows(true, { noValue: false, isNotUnique: false });
+  }
+  protected getIsAnswered(): boolean {
+    return super.getIsAnswered() && this.hasValuesInAllRows();
+  }
+  private createMatrixRow(
+    item: ItemValue,
+    fullName: string,
+    value: any
+  ): MatrixRowModel {
+    var row = new MatrixRowModel(item, fullName, this, value);
+    this.onMatrixRowCreated(row);
+    return row;
+  }
+  protected onMatrixRowCreated(row: MatrixRowModel) { }
+  protected setQuestionValue(newValue: any, updateIsAnswered: boolean = true) {
+    super.setQuestionValue(newValue, this.isRowChanging || updateIsAnswered);
+    if (!this.generatedVisibleRows || this.generatedVisibleRows.length == 0)
+      return;
+    this.isRowChanging = true;
+    try {
+      var val = this.value;
+      if (!val) val = {};
+      if (this.rows.length == 0) {
+        this.generatedVisibleRows[0].setValueDirectly(val);
+      } else {
+        for (var i = 0; i < this.generatedVisibleRows.length; i++) {
+          var row = this.generatedVisibleRows[i];
+          var rowVal = val[row.name];
+          if (this.isValueEmpty(rowVal)) rowVal = null;
+          this.generatedVisibleRows[i].setValueDirectly(rowVal);
+        }
+      }
+      this.refreshRowsErrors();
+      this.updateIsAnswered();
+    } finally {
+      this.isRowChanging = false;
+    }
+  }
+  public getValueGetterContext(): IValueGetterContext {
+    return new MatrixValueGetterContext(this, name => this.getMatrixRowByName(name));
+  }
+  protected getDisplayValueCore(keysAsText: boolean, value: any): any {
+    var res: { [index: string]: any } = {};
+    for (var key in value) {
+      var newKey = keysAsText
+        ? ItemValue.getTextOrHtmlByValue(this.rows, key)
+        : key;
+      if (!newKey) newKey = key;
+      const val = value[key];
+      var newValue = Array.isArray(val)
+        ? val.map(v => ItemValue.getTextOrHtmlByValue(this.columns, v) || v)
+        : ItemValue.getTextOrHtmlByValue(this.columns, val);
+      if (!newValue) newValue = val;
+      res[newKey] = newValue;
+    }
+    return res;
+  }
+  public getPlainData(
+    options: IPlainDataOptions = {
+      includeEmpty: true,
+    }
+  ): IQuestionPlainData {
+    var questionPlainData = super.getPlainData(options);
+    if (!!questionPlainData) {
+      var values = this.createValueCopy();
+      questionPlainData.isNode = true;
+      const rows = options.includeEmpty ? this.visibleRows : this.visibleRows.filter((r: MatrixRowModel) => r.name in (values || {}));
+      questionPlainData.data = rows.map((row: MatrixRowModel) => {
+        const rowValue = values ? values[row.name] : undefined;
+        const displayValue = Array.isArray(rowValue)
+          ? rowValue.map(v => ItemValue.getTextOrHtmlByValue(this.visibleColumns, v))
+          : ItemValue.getTextOrHtmlByValue(this.visibleColumns, rowValue);
+        var rowDataItem = <any>{
+          name: row.name,
+          title: row.text,
+          value: rowValue,
+          displayValue: displayValue,
+          getString: (val: any) => this.getValueAsString(val),
+          isNode: false,
+        };
+        var item = ItemValue.getItemByValue(
+          this.visibleColumns,
+          rowValue
+        );
+        if (!!item) {
+          (options.calculations || []).forEach((calculation) => {
+            rowDataItem[calculation.propertyName] =
+              item[calculation.propertyName];
+          });
+        }
+        return rowDataItem;
+      });
+    }
+    return questionPlainData;
+  }
+  public addConditionObjectsByContext(
+    objects: Array<IConditionObject>,
+    context: any
+  ) {
+    for (var i = 0; i < this.rows.length; i++) {
+      var row = this.rows[i];
+      if (!!row.value) {
+        objects.push({
+          name: this.getValueName() + "." + row.value,
+          text: this.processedTitle + "." + row.calculatedText,
+          question: this,
+        });
+      }
+    }
+  }
+  public getConditionJson(operator: string = null, path: string = null): any {
+    if (!path) {
+      const json = super.getConditionJson(operator);
+      delete json["allowClear"];
+      return json;
+    }
+    var question = new QuestionDropdownModel(path);
+    question.choices = this.columns;
+    var json = new JsonObject().toJsonObject(question);
+    json["type"] = question.getType();
+    return json;
+  }
+  public clearIncorrectValues(): void {
+    this.clearInvisibleValuesInRowsAndColumns(true, true, true);
+    super.clearIncorrectValues();
+  }
+  protected clearValueIfInvisibleCore(reason: string): void {
+    super.clearValueIfInvisibleCore(reason);
+    this.clearInvisibleValuesInRowsAndColumns(true, true, false);
+  }
+  protected clearInvisibleColumnValues(): void {
+    this.clearInvisibleValuesInRowsAndColumns(false, true, false);
+  }
+  protected clearInvisibleValuesInRowsAndColumns(inRows: boolean, inColumns: boolean, inCorrectRows: boolean): void {
+    if (this.isEmpty()) return;
+    let updatedData = this.getUnbindValue(this.value);
+    const newData: any = {};
+    const rows = this.rows;
+    for (let i = 0; i < rows.length; i++) {
+      const key = rows[i].value;
+      if (!!updatedData[key]) {
+        if (inRows && !rows[i].isVisible) {
+          delete updatedData[key];
+        } else {
+          if (inColumns) {
+            this.clearIncorrectValuesInRow(key, updatedData);
+          }
+          if (updatedData[key] != undefined) {
+            newData[key] = updatedData[key];
+          }
+        }
+      }
+    }
+    if (inCorrectRows) {
+      // Keep the rows of the matrices that share the value with this one.
+      for (const key in updatedData) {
+        if (!this.hasValueKey(key) && this.isValueKeyKnown(key)) {
+          newData[key] = updatedData[key];
+        }
+      }
+      updatedData = newData;
+    }
+    if (this.isEqualToValue(updatedData)) return;
+    this.runDeletingEmptyValues((): void => { this.value = updatedData; });
+  }
+  protected clearIncorrectValuesInRow(key: any, data: any): void {
+    const obj = data[key];
+    if (obj === undefined) {
+      delete data[key];
+      return;
+    }
+    if (this.isMultiSelect && Array.isArray(obj)) {
+      for (let i = obj.length - 1; i >= 0; i--) {
+        const col = this.getVisibleColumnByValue(obj[i]);
+        if (!col) {
+          obj.splice(i, 1);
+        }
+      }
+      if (obj.length === 0) {
+        delete data[key];
+      }
+    } else {
+      if (!this.getVisibleColumnByValue(obj)) {
+        delete data[key];
+      }
+    }
+  }
+  private getVisibleColumnByValue(val: any): ItemValue {
+    const col = ItemValue.getItemByValue(this.columns, val);
+    return !!col && col.isVisible ? col : null;
+  }
+  protected getFirstInputElementId(): string | (() => HTMLElement) {
+    var rows = this.generatedVisibleRows;
+    if (!rows) rows = this.visibleRows;
+    if (rows.length > 0 && this.visibleColumns.length > 0) {
+      return this.inputId + "_" + rows[0].name + "_" + 0;
+    }
+    return super.getFirstInputElementId();
+  }
+  //IMatrixData
+  onMatrixRowChanged(row: MatrixRowModel) {
+    if (this.isRowChanging) return;
+    this.isRowChanging = true;
+    try {
+      if (!this.hasRows) {
+        this.setNewValue(row.value);
+      } else {
+        const newValue = this.value || {};
+        if (this.isValueEmpty(row.value)) {
+          delete newValue[row.name];
+        } else {
+          newValue[row.name] = row.value;
+        }
+        this.setNewValue(newValue);
+      }
+    } finally {
+      this.isRowChanging = false;
+    }
+  }
+  getCorrectedRowValue(value: any): any {
+    const col = this.getColumnByValue(value);
+    return col ? col.value : value;
+  }
+  getDisplayRowValue(value: any): string {
+    const col = this.getColumnByValue(value);
+    if (col) return col.text;
+    return value !== null && value !== undefined ? value.toString() : "";
+  }
+  cellClick(row: MatrixRowModel, column: MatrixColumn): void {
+    if (this.isReadOnly || this.isDisabledAttr) return;
+    row.value = this.getValueOnCellClick(row, column);
+  }
+  private getValueOnCellClick(row: MatrixRowModel, column: MatrixColumn): any {
+    if (this.isMultiSelect) {
+      if (column.isExclusive) {
+        if (this.isCellChecked(row, column)) return undefined;
+        return [column.value];
+      }
+      let val = Array.isArray(row.value) ? [].concat(row.value) : [];
+      if (this.isCellChecked(row, column)) {
+        const index = this.getRowValueIndex(row, column);
+        if (index > -1) {
+          val.splice(index, 1);
+        }
+        if (val.length === 0) {
+          val = undefined;
+        }
+      } else {
+        if (!Array.isArray(val)) {
+          val = [];
+        }
+        this.columns.forEach(col => {
+          if (col.isExclusive) {
+            const index = val.indexOf(col.value);
+            if (index > -1) val.splice(index, 1);
+          }
+        });
+        val.push(column.value);
+      }
+      return val;
+    }
+    return column.value;
+  }
+  isCellChecked(row: MatrixRowModel, column: ItemValue): boolean {
+    if (this.isMultiSelect) {
+      return this.getRowValueIndex(row, column) > -1;
+    }
+    return this.isTwoValueEqualsInSurvey(row.value, column.value);
+  }
+  getRowValueIndex(row: MatrixRowModel, column: ItemValue): number {
+    const val = row.value;
+    if (!Array.isArray(val)) return -1;
+    for (let i = 0; i < val.length; i++) {
+      if (this.isTwoValueEquals(val[i], column.value)) return i;
+    }
+    return -1;
+  }
+
+  private getColumnByValue(value: any): ItemValue {
+    const cols = this.columns;
+    for (var i = 0; i < cols.length; i++) {
+      if (value === cols[i].value) return cols[i];
+    }
+    for (var i = 0; i < cols.length; i++) {
+      if (this.isTwoValueEquals(value, cols[i].value)) return cols[i];
+    }
+    return null;
+  }
+  hasErrorInRow(row: MatrixRowModel): boolean {
+    return !!this.errorsInRow && !!this.errorsInRow[row.name];
+  }
+  protected getSearchableItemValueKeys(keys: Array<string>) {
+    keys.push("columns");
+    keys.push("rows");
+  }
+
+  private get SurveyModel() {
+    return this.survey as SurveyModel;
+  }
+  public getColumnHeaderWrapperComponentName(cell: ItemValue) {
+    return this.SurveyModel.getElementWrapperComponentName(
+      { column: cell },
+      "column-header"
+    );
+  }
+  public getColumnHeaderWrapperComponentData(cell: ItemValue) {
+    return this.SurveyModel.getElementWrapperComponentData(
+      { column: cell },
+      "column-header"
+    );
+  }
+  public getRowHeaderWrapperComponentName(cell: ItemValue) {
+    return this.SurveyModel.getElementWrapperComponentName(
+      { row: cell },
+      "row-header"
+    );
+  }
+  public getRowHeaderWrapperComponentData(cell: ItemValue) {
+    return this.SurveyModel.getElementWrapperComponentData(
+      { row: cell },
+      "row-header"
+    );
+  }
+}
+Serializer.addClass("matrixcolumn",
+  [{ name: "isExclusive:boolean", visibleIf: (obj) => obj.locOwner?.cellType === "checkbox", locationInTable: "detail" }],
+  (value: any) => new MatrixColumn(value), "itemvalue");
+
+Serializer.addClass(
+  "matrix",
+  [
+    { name: "showCommentArea:switch", visible: true },
+    "columnsVisibleIf:condition",
+    "rowsVisibleIf:condition",
+    "columnMinWidth",
+    { name: "showHeader:boolean", default: true },
+    {
+      name: "verticalAlign",
+      choices: ["top", "middle"],
+      default: "middle",
+    },
+    { name: "alternateRows:boolean", default: false },
+    {
+      name: "displayMode",
+      default: "auto",
+      choices: ["auto", "table", "list"],
+      visible: false
+    },
+    "rowTitleWidth",
+    {
+      name: "columns:matrixcolumn[]", uniqueProperty: "value",
+      baseValue: function () {
+        return getLocaleString("matrix_column");
+      },
+    },
+    {
+      name: "rows:itemvalue[]", uniqueProperty: "value",
+      baseValue: function () {
+        return getLocaleString("matrix_row");
+      },
+    },
+    { name: "cells:cells", serializationProperty: "cells" },
+    {
+      name: "rowOrder", alternativeName: "rowsOrder",
+      default: "initial",
+      choices: ["initial", "random"],
+    },
+    { name: "eachRowRequired:boolean", alternativeName: "isAllRowRequired" },
+    { name: "eachRowUnique:boolean" },
+    "hideIfRowsEmpty:boolean",
+    { name: "cellComponent", visible: false, default: "survey-matrix-cell" },
+    { name: "cellType", default: "radio", choices: ["radio", "checkbox"] },
+  ],
+  function () {
+    return new QuestionMatrixModel("");
+  },
+  "question"
+);
+
+QuestionFactory.Instance.registerQuestion("matrix", (name) => {
+  var q = new QuestionMatrixModel(name);
+  q.rows = QuestionFactory.DefaultRows;
+  q.columns = QuestionFactory.DefaultColums;
+  return q;
+});
+
+export class MatrixSingleInputBehavior extends QuestionSingleInputBehavior {
+  protected get matrix(): QuestionMatrixModel {
+    return this.question as QuestionMatrixModel;
+  }
+  protected getSingleInputQuestionsCore(question: Question, checkDynamic: boolean): Array<Question> {
+    return this.matrix.getMatrixSingleInputQuestions(question, checkDynamic);
+  }
+}

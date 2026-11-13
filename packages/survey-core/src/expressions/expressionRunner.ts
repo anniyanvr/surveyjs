@@ -1,0 +1,125 @@
+import { HashTable } from "../helpers";
+import { IValueGetterContext, IValueGetterNameInfo, VariableGetterContextEx } from "../conditions/conditionProcessValue";
+import { IExpressionValidationOptions } from "../base";
+import { IExpressionError } from "./expressionError";
+import type { IExpressionExecutorBase } from "./expressionExecutor";
+import type { ISurveySettings } from "../survey-settings";
+
+export { IExpressionExecutorBase };
+
+export var createExpressionExecutor: (expression: string) => IExpressionExecutorBase;
+export function setCreateExpressionExecutor(func: (expression: string) => IExpressionExecutorBase): void {
+  createExpressionExecutor = func;
+}
+
+export class ExpressionRunnerBase {
+  private expressionExecutor: IExpressionExecutorBase;
+  private variables: string[];
+  private variablesInfo: Array<IValueGetterNameInfo>;
+  private containsFunc: boolean;
+  private containsNoParamsFunc: boolean;
+  private runIdCounter = 0;
+  public getRunId: () => number;
+  public onBeforeAsyncRun: (id: number) => void;
+  public onAfterAsyncRun: (id: number) => void;
+
+  public constructor(expression: string) {
+    this.expression = expression;
+  }
+  public get expression(): string {
+    return !!this.expressionExecutor ? this.expressionExecutor.expression : "";
+  }
+
+  public set expression(value: string) {
+    if (!!this.expressionExecutor && value === this.expression) return;
+    this.expressionExecutor = createExpressionExecutor(value);
+    this.expressionExecutor.onComplete = (res: any, id: number) => { this.doOnComplete(res, id); };
+    this.variables = undefined;
+    this.variablesInfo = undefined;
+    this.containsFunc = undefined;
+    this.containsNoParamsFunc = undefined;
+  }
+
+  public getVariables(): Array<string> {
+    if (this.variables === undefined) {
+      this.variables = this.expressionExecutor.getVariables();
+    }
+    return this.variables;
+  }
+  // The parsed parts of getVariables() for the value-change skip check, one item per variable.
+  // ValueGetter.isAnyKeyChanged fills it as it reaches a variable and rebuilds an item whose name differs.
+  public getVariablesInfo(): Array<IValueGetterNameInfo> {
+    if (this.variablesInfo === undefined) {
+      const vars = this.getVariables();
+      this.variablesInfo = new Array<IValueGetterNameInfo>(Array.isArray(vars) ? vars.length : 0);
+    }
+    return this.variablesInfo;
+  }
+
+  public hasFunction(noParamsOnly?: boolean): boolean {
+    if (noParamsOnly === true) {
+      // The skip checks ask this on every value change. The answer depends only on the parsed
+      // expression, and nothing changes a parsed operand tree, so it is kept until the expression changes
+      if (this.containsNoParamsFunc === undefined) {
+        this.containsNoParamsFunc = !!this.expressionExecutor && this.expressionExecutor.hasFunction(true);
+      }
+      return this.containsNoParamsFunc;
+    }
+    if (this.containsFunc === undefined) {
+      this.containsFunc = this.expressionExecutor.hasFunction();
+    }
+    return this.containsFunc;
+  }
+  // The names of the functions the expression calls, or undefined when the executor cannot tell
+  public getFunctionNames(): Array<string> {
+    const executor = this.expressionExecutor;
+    return typeof executor.getFunctionNames === "function" ? executor.getFunctionNames() : undefined;
+  }
+  public get isAsync(): boolean {
+    return this.expressionExecutor.isAsync;
+  }
+
+  public canRun(): boolean {
+    return this.expressionExecutor.canRun();
+  }
+  public runContextCore(context: IValueGetterContext, properties?: HashTable<any>, settings?: ISurveySettings): any {
+    const id = this.getRunId ? this.getRunId() : ++this.runIdCounter;
+    try {
+      if (this.onBeforeAsyncRun && this.isAsync) {
+        this.onBeforeAsyncRun(id);
+      }
+      return this.expressionExecutor.runContext(context, properties, id, settings);
+    } catch(e) {
+      this.doAfterAsyncRun(id);
+      throw e;
+    }
+  }
+  public validate(context: IValueGetterContext, options: IExpressionValidationOptions, isCondition: boolean): IExpressionError[] {
+    return this.expressionExecutor.validate(context, isCondition, options);
+  }
+  protected doOnComplete(res: any, id: number): void {
+    this.doAfterAsyncRun(id);
+  }
+  private doAfterAsyncRun(id: number): void {
+    if (this.onAfterAsyncRun && this.isAsync) {
+      this.onAfterAsyncRun(id);
+    }
+  }
+}
+
+export class ExpressionRunner extends ExpressionRunnerBase {
+  public onRunComplete: (result: any) => void;
+  public runValues(values: HashTable<any>, properties?: HashTable<any>, settings?: ISurveySettings): any {
+    return this.runContext(new VariableGetterContextEx(values, properties?.context), properties, settings);
+  }
+  public runContext(context: IValueGetterContext, properties?: HashTable<any>, settings?: ISurveySettings): any {
+    return this.runContextCore(context, properties, settings);
+  }
+  protected doOnComplete(res: any, id: number): void {
+    try {
+      if (!!this.onRunComplete)this.onRunComplete(res);
+    } finally {
+      super.doOnComplete(res, id);
+    }
+  }
+}

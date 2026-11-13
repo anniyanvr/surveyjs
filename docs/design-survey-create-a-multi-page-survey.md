@@ -1,3 +1,7 @@
+---
+title: Create a Multi-Page Survey | SurveyJS Form Libraries
+description: SurveyJS Form Library lets you add multiple pages to your survey. Learn how to control page visibility and navigation, and configure the introductory and thank you pages.
+---
 # Create a Multi-Page Survey
 
 This step-by-step tutorial will help you create a survey with multiple pages.
@@ -11,14 +15,20 @@ This step-by-step tutorial will help you create a survey with multiple pages.
   - [Start Page](#start-page)
   - [Complete Page](#complete-page)
   - [Preview Page](#preview-page)
+- [Render the Survey](#render-the-survey)
 
 The survey below illustrates the result:
 
-<iframe src="https://surveyjs.github.io/code-examples/multi-page-survey/jquery/"
-    style="width:100%; height:400px; border:0; border-radius: 4px; overflow:hidden;"
+<details>
+  <summary>View Live Example</summary>
+
+<iframe src="/proxy/github/code-examples/multi-page-survey/html-css-js/index.html"
+    style="width:100%; border:0; border-radius: 4px; overflow:hidden;"
 ></iframe>
 
-You can find the full code in the following GitHub repository: <a href="https://github.com/surveyjs/code-examples/tree/main/multi-page-survey" target="_blank">Multi-Page Survey</a>.
+</details>
+
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/multi-page-survey (linkStyle))
 
 ## Add Multiple Pages to a Survey
 
@@ -30,45 +40,45 @@ The following model defines a four-page survey that contains the [Radiogroup](ht
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
-    }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
+  pages: [{
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
     }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+    }, {
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
+    }],
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+  }]
 };
 ```
 
@@ -88,88 +98,92 @@ In the following code, the `visibleIf` property is set to a Boolean expression t
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            name: "satisfaction-score",
-            // ...
-        }]
+  pages: [{
+    elements: [{
+      name: "satisfaction-score",
+      type: "radiogroup",
+      // ...
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      type: "comment",
+      // ...
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            // ...
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            // ...
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            // ...
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            // ...
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      type: "rating",
+      // ...
     }],
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      type: "comment",
+      // ...
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      type: "comment",
+      // ...
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }],
 };
 ```
 
 If you need to access an array of visible pages, use the [SurveyModel](https://surveyjs.io/Documentation/Library?id=surveymodel)'s [`visiblePages`](https://surveyjs.io/Documentation/Library?id=surveymodel#visiblePages) property. If you only need the number of visible pages, use the [`visiblePageCount`](https://surveyjs.io/Documentation/Library?id=surveymodel#visiblePageCount) property. Both properties update dynamically as the respondent progresses in the survey.
 
 <details>
-  <summary>View full survey model</summary>
+  <summary>View Full Survey Model</summary>
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
+  pages: [{
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
     }],
-    showQuestionNumbers: "off",
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }]
 };
 ```
 </details>
@@ -210,7 +224,7 @@ Navigates the respondent to the next page. Returns `false` if the navigation did
 - [`prevPage()`](https://surveyjs.io/Documentation/Library?id=surveymodel#prevPage)      
 Navigates the respondent to the previous page. Returns `false` if the navigation did not happen, for instance, because the current page is the first page. Unlike with `nextPage()`, validation errors are ignored.
 
-- [`completeLastPage()`](https://surveyjs.io/Documentation/Library?id=surveymodel#completeLastPage)      
+- [`tryComplete()`](https://surveyjs.io/Documentation/Library?id=surveymodel#tryComplete)      
 Completes the survey. Fails and returns `false` if the current page has validation errors.
 
 - [`doComplete()`](https://surveyjs.io/Documentation/Library?id=surveymodel#doComplete)       
@@ -225,17 +239,17 @@ survey.start();
 
 const navigatedForward = survey.nextPage();
 if (!navigatedForward) {
-    alert("Navigation failed!")
+  alert("Navigation failed!")
 }
 
 const navigatedBack = survey.prevPage();
 if (!navigatedBack) {
-    alert("Navigation failed!")
+  alert("Navigation failed!")
 }
 
-const completedSuccessfully = survey.completeLastPage();
+const completedSuccessfully = survey.tryComplete();
 if (!completedSuccessfully) {
-    alert("Check the answers for validation errors")
+  alert("Check the answers for validation errors")
 }
 
 survey.doComplete();
@@ -243,7 +257,7 @@ survey.doComplete();
 
 In this tutorial, the survey uses out-of-the-box page navigation and does not demonstrate the described API members. However, the given information should help you implement custom page navigation if you find it more suitable in your scenario.
 
-[View Custom Navigation Example](https://surveyjs.io/Examples/Library?id=survey-customnavigation)
+[View Demo](https://surveyjs.io/Examples/Library?id=survey-customnavigation (linkStyle))
 
 ### Page Navigation UI
 
@@ -251,19 +265,19 @@ Respondents can click the Next, Previous, and Complete buttons to navigate surve
 
 ```js
 const surveyJson = {
-    pageNextText: "Forward",
-    pagePrevText: "Back",
-    completeText: "Submit"
+  pageNextText: "Forward",
+  pagePrevText: "Back",
+  completeText: "Submit"
 };
 ```
 
-If you want to hide the buttons, set the [`showNavigationButtons`](https://surveyjs.io/Documentation/Library?id=surveymodel#showNavigationButtons) property to `"none"`. In this case, you can use the API described in the [Switch Between Pages](#switch-between-pages) article to implement custom page navigation. Alternatively, you can enable the [`goNextPageAutomatic`](https://surveyjs.io/Documentation/Library?id=surveymodel#goNextPageAutomatic) and [`allowCompleteSurveyAutomatic`](https://surveyjs.io/Documentation/Library?id=surveymodel#allowCompleteSurveyAutomatic) properties to proceed to the next page or complete the survey automatically when all questions are answered.
+If you want to hide the buttons, set the [`showNavigationButtons`](https://surveyjs.io/Documentation/Library?id=surveymodel#showNavigationButtons) property to `false`. In this case, you can use the API described in the [Switch Between Pages](#switch-between-pages) article to implement custom page navigation. Alternatively, you can enable the [`autoAdvanceEnabled`](https://surveyjs.io/Documentation/Library?id=surveymodel#autoAdvanceEnabled) and [`autoAdvanceAllowComplete`](https://surveyjs.io/Documentation/Library?id=surveymodel#autoAdvanceAllowComplete) properties to proceed to the next page or complete the survey automatically when all questions are answered.
 
 ```js
 const surveyJson = {
-    showNavigationButtons: "none",
-    goNextPageAutomatic: true,
-    allowCompleteSurveyAutomatic: true
+  showNavigationButtons: false,
+  autoAdvanceEnabled: true,
+  autoAdvanceAllowComplete: true
 };
 ```
 
@@ -271,72 +285,74 @@ If you only want to hide the Previous button, disable the [`showPrevButton`](htt
 
 ```js
 const surveyJson = {
-    showPrevButton: false,
+  showPrevButton: false,
 };
 ```
 
-You can also indicate survey progress on a progress bar. To display and position it on the page, set the `showProgressBar` property to `"top"`, `"bottom"`, or `"both"`.
+You can also indicate survey progress on a progress bar. To display and position it on the page, set the [`showProgressBar`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#showProgressBar) property to `true` and specify the [`progressBarLocation`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#progressBarLocation) property:
 
 ```js
 const surveyJson = {
-    showProgressBar: "top"
+  showProgressBar: true,
+  progressBarLocation: "aboveheader"
 };
 ```
+
+[View Demo](https://surveyjs.io/form-library/examples/navigation-default/ (linkStyle)) 
 
 The example in this tutorial uses only the `pageNextText`, `completeText`, and `showPrevButton` properties:
 
 <details>
-  <summary>View full survey model</summary>
+  <summary>View Full Survey Model</summary>
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
+  pages: [{
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
     }],
-    showQuestionNumbers: "off",
-    pageNextText: "Forward",
-    completeText: "Submit",
-    showPrevButton: false,
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }],
+  pageNextText: "Forward",
+  completeText: "Submit",
+  showPrevButton: false,
 };
 ```
 </details>
@@ -349,95 +365,98 @@ A start page usually shows an introduction to your survey. It does not affect th
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            type: "html",
-            html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
-        }]
-    },
-    // ...
-    // Other pages are configured here
-    // ...
-    ],
+  pages: [{
+    elements: [{
+      type: "html",
+      name: "introduction",
+      html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
+    }]
+  },
+  // ...
+  // Other pages are configured here
+  // ...
+  ],
 };
 ```
 
-Enable the [`firstPageIsStarted`](https://surveyjs.io/Documentation/Library?id=surveymodel#firstPageIsStarted) property to let the survey know that the first page is a start page and add a Start button to the page markup. You can use the [`startSurveyText`](https://surveyjs.io/Documentation/Library?id=surveymodel#startSurveyText) property to change the button caption:
+Enable the [`firstPageIsStartPage`](https://surveyjs.io/Documentation/Library?id=surveymodel#firstPageIsStartPage) property to let the survey know that the first page is a start page and add a Start button to the page markup. You can use the [`startSurveyText`](https://surveyjs.io/Documentation/Library?id=surveymodel#startSurveyText) property to change the button caption:
 
 ```js
 const surveyJson = {
-    firstPageIsStarted: true,
-    startSurveyText: "Take the Survey",
+  firstPageIsStartPage: true,
+  startSurveyText: "Take the Survey",
 };
 ```
 
-If you need to access the start page in code, you can use the [`startedPage`](https://surveyjs.io/Documentation/Library?id=surveymodel#startedPage) property:
+[View Demo](https://surveyjs.io/form-library/examples/make-quiz-javascript/ (linkStyle))
+
+If you need to access the start page in code, you can use the [`startPage`](https://surveyjs.io/Documentation/Library?id=surveymodel#startPage) property:
 
 ```js
 const survey = new Survey.Model(surveyJson);
 
-const startPage = survey.startedPage;
+const startPage = survey.startPage;
 ```
 
 <details>
-  <summary>View full survey model</summary>
+  <summary>View Full Survey Model</summary>
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            type: "html",
-            html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
-        }]
+  pages: [{
+    elements: [{
+      type: "html",
+      name: "introduction",
+      html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
+    }]
+  }, {
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
-    }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
     }],
-    showQuestionNumbers: "off",
-    pageNextText: "Forward",
-    completeText: "Submit",
-    showPrevButton: false,
-    firstPageIsStarted: true,
-    startSurveyText: "Take the Survey",
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }],
+  pageNextText: "Forward",
+  completeText: "Submit",
+  showPrevButton: false,
+  firstPageIsStartPage: true,
+  startSurveyText: "Take the Survey",
 };
 ```
 </details>
@@ -449,93 +468,93 @@ A complete page displays a "Thank you" message when the survey ends. If you want
 - [`completedHtml`](https://surveyjs.io/Documentation/Library?id=surveymodel#completedHtml)       
 Custom HTML content displayed on the complete page.
 
-    ```js
-    const surveyJson = {
-        completedHtml: "Thank you for your feedback!",
-    };
-    ```
+  ```js
+  const surveyJson = {
+    completedHtml: "Thank you for your feedback!",
+  };
+  ```
 
 - [`completedHtmlOnCondition`](https://surveyjs.io/Documentation/Library?id=surveymodel#completedHtmlOnCondition)        
 An array that allows you to specify different complete page content based on conditions. Each object is this array should contain a [Boolean expression](https://surveyjs.io/Documentation/Library?id=design-survey-conditional-display#boolean-expressions) and HTML markup that applies when this expression evaluates to `true`:
 
-    ```js
-    const surveyJson = {
-        completedHtmlOnCondition: [{
-            expression: "{some_field} > 10",
-            html: "Custom markup to show when some_field is greater than 10"
-        }, {
-            expression: "{some_field} < 10",
-            html: "Custom markup to show when some_field is less than 10"
-        },
-        // ...
-        ]
-    };
-    ```
+  ```js
+  const surveyJson = {
+    completedHtmlOnCondition: [{
+      expression: "{some_field} > 10",
+      html: "Custom markup to show when some_field is greater than 10"
+    }, {
+      expression: "{some_field} < 10",
+      html: "Custom markup to show when some_field is less than 10"
+    },
+    // ...
+    ]
+  };
+  ```
 
     When none of the expressions evaluate to `true`, the complete page displays the HTML markup from the `completedHtml` property.
 
-If your survey should not display a complete page, disable the [`showCompletedPage`](https://surveyjs.io/Documentation/Library?id=surveymodel#showCompletedPage) property.
+If your survey should not display a complete page, disable the [`showCompletePage`](https://surveyjs.io/Documentation/Library?id=surveymodel#showCompletePage) property.
 
 <details>
-  <summary>View full survey model</summary>
+  <summary>View Full Survey Model</summary>
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            type: "html",
-            html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
-        }]
+  pages: [{
+    elements: [{
+      type: "html",
+      name: "introduction",
+      html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
+    }]
+  }, {
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
-    }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
     }],
-    showQuestionNumbers: "off",
-    pageNextText: "Forward",
-    completeText: "Submit",
-    showPrevButton: false,
-    firstPageIsStarted: true,
-    startSurveyText: "Take the Survey",
-    completedHtml: "Thank you for your feedback!",
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }],
+  pageNextText: "Forward",
+  completeText: "Submit",
+  showPrevButton: false,
+  firstPageIsStartPage: true,
+  startSurveyText: "Take the Survey",
+  completedHtml: "Thank you for your feedback!",
 };
 ```
 </details>
@@ -544,19 +563,22 @@ const surveyJson = {
 
 A preview page allows respondents to preview and correct their answers before the survey is completed. The preview page displays all visible survey pages as panels. Each panel has an Edit button that sends the respondent back to the corresponding page.
 
-To enable the preview page, specify whether it should display all visible questions or only those that have answers. Set the [`showPreviewBeforeComplete`](https://surveyjs.io/Documentation/Library?id=surveymodel#showPreviewBeforeComplete) property to `"showAllQuestions"` or `"showAnsweredQuestions"`:
+To enable the preview page, set the [`showPreviewBeforeComplete`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#showPreviewBeforeComplete) property to `true`. By default, the preview page displays all visible questions. If it should display only answered questions, change the [`previewMode`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#previewMode) property value to `"answeredQuestions"`.
 
 ```js
 const surveyJson = {
-    showPreviewBeforeComplete: "showAnsweredQuestions"
+  showPreviewBeforeComplete: true,
+  previewMode: "answeredQuestions"
 };
 ```
+
+[View Demo](https://surveyjs.io/form-library/examples/survey-preview/ (linkStyle))
 
 When the preview page is enabled, the last page in the survey displays a Preview button instead of a Complete button. Set the [`previewText`](https://surveyjs.io/Documentation/Library?id=surveymodel#previewText) property if you want to change the Preview button caption:
 
 ```js
 const surveyJson = {
-    previewText: "Preview answers"
+  previewText: "Preview answers"
 };
 ```
 
@@ -575,84 +597,93 @@ const survey = new Survey.Model(surveyJson);
 
 const previewShown = survey.showPreview();
 if (!previewShown) {
-    alert("Check the answers for validation errors")
+  alert("Check the answers for validation errors")
 }
 
 survey.cancelPreview();
 ```
 
-The example in this tutorial uses only the `showPreviewBeforeComplete` property:
+The example in this tutorial uses only the `showPreviewBeforeComplete` and `previewMode` properties:
 
 <details>
-  <summary>View full survey model</summary>
+  <summary>View Full Survey Model</summary>
 
 ```js
 const surveyJson = {
-    pages: [{
-        elements: [{
-            type: "html",
-            html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
-        }]
+  pages: [{
+    elements: [{
+      type: "html",
+      name: "introduction",
+      html: "<h2>In this survey, we will ask you a couple questions about your impressions of our product.</h2>"
+    }]
+  }, {
+    elements: [{
+      name: "satisfaction-score",
+      title: "How would you describe your experience with our product?",
+      type: "radiogroup",
+      choices: [
+        { value: 5, text: "Fully satisfying" },
+        { value: 4, text: "Generally satisfying" },
+        { value: 3, text: "Neutral" },
+        { value: 2, text: "Rather unsatisfying" },
+        { value: 1, text: "Not satisfying at all" }
+      ],
+      isRequired: true
+    }]
+  }, {
+    elements: [{
+      name: "what-would-make-you-more-satisfied",
+      title: "What can we do to make your experience more satisfying?",
+      type: "comment",
+      visibleIf: "{satisfaction-score} = 4"
     }, {
-        elements: [{
-            name: "satisfaction-score",
-            title: "How would you describe your experience with our product?",
-            type: "radiogroup",
-            choices: [
-                { value: 5, text: "Fully satisfying" },
-                { value: 4, text: "Generally satisfying" },
-                { value: 3, text: "Neutral" },
-                { value: 2, text: "Rather unsatisfying" },
-                { value: 1, text: "Not satisfying at all" }
-            ],
-            isRequired: true
-        }]
-    }, {
-        elements: [{
-            name: "what-would-make-you-more-satisfied",
-            title: "What can we do to make your experience more satisfying?",
-            type: "comment",
-            visibleIf: "{satisfaction-score} = 4"
-        }, {
-            name: "nps-score",
-            title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
-            type: "rating",
-            rateMin: 0,
-            rateMax: 10
-        }],
-        visibleIf: "{satisfaction-score} >= 4"
-    }, {
-        elements: [{
-            name: "how-can-we-improve",
-            title: "In your opinion, how could we improve our product?",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} = 3"
-    }, {
-        elements: [{
-            name: "disappointing-experience",
-            title: "Please let us know why you had such a disappointing experience with our product",
-            type: "comment"
-        }],
-        visibleIf: "{satisfaction-score} =< 2"
+      name: "nps-score",
+      title: "On a scale of zero to ten, how likely are you to recommend our product to a friend or colleague?",
+      type: "rating",
+      rateMin: 0,
+      rateMax: 10
     }],
-    showQuestionNumbers: "off",
-    pageNextText: "Forward",
-    completeText: "Submit",
-    showPrevButton: false,
-    firstPageIsStarted: true,
-    startSurveyText: "Take the Survey",
-    completedHtml: "Thank you for your feedback!",
-    showPreviewBeforeComplete: "showAnsweredQuestions"
+    visibleIf: "{satisfaction-score} >= 4"
+  }, {
+    elements: [{
+      name: "how-can-we-improve",
+      title: "In your opinion, how could we improve our product?",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} = 3"
+  }, {
+    elements: [{
+      name: "disappointing-experience",
+      title: "Please let us know why you had such a disappointing experience with our product",
+      type: "comment"
+    }],
+    visibleIf: "{satisfaction-score} =< 2"
+  }],
+  pageNextText: "Forward",
+  completeText: "Submit",
+  showPrevButton: false,
+  firstPageIsStartPage: true,
+  startSurveyText: "Take the Survey",
+  completedHtml: "Thank you for your feedback!",
+  showPreviewBeforeComplete: true,
+  previewMode: "answeredQuestions"
 };
 ```
 </details>
 
-<a href="https://github.com/surveyjs/code-examples/tree/main/multi-page-survey" target="_blank">View full code on GitHub</a>
+## Render the Survey
 
-## Further Reading
+Refer to the following platform-specific articles for information on how to render the survey in your application:
+
+- [Render the Survey - Angular](https://surveyjs.io/form-library/documentation/get-started-angular#render-the-survey)
+- [Render the Survey - Vue](https://surveyjs.io/form-library/documentation/get-started-vue#render-the-survey)
+- [Render the Survey - React](https://surveyjs.io/form-library/documentation/get-started-react#render-the-survey)
+- [Render the Survey - HTML/CSS/JavaScript](/form-library/documentation/get-started-html-css-javascript#render-the-survey)
+
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/multi-page-survey (linkStyle))
+
+## See Also
 
 - [Create a Quiz](https://surveyjs.io/Documentation/Library?id=design-survey-create-a-quiz)
-- [Dynamic Text](https://surveyjs.io/Documentation/Library?id=design-survey-dynamic-text)
-- [Conditional Display](https://surveyjs.io/Documentation/Library?id=design-survey-conditional-display)
-- [Survey States](https://surveyjs.io/Documentation/Library?id=handle-results-survey-states)
+- [Conditional Logic and Dynamic Texts](https://surveyjs.io/Documentation/Library?id=design-survey-conditional-logic)
+- [Access Survey Results](https://surveyjs.io/Documentation/Library?id=handle-survey-results-access)

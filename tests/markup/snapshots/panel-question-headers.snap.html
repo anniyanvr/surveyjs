@@ -1,27 +1,37 @@
-<div style="width: 100%; flex: 1 1 100%; min-width: 300px; max-width: initial;">
-	<div class="sd-element sd-element--complex sd-panel sd-row__panel sd-element--with-frame">
-		<div class="sd-panel__header sd-element__header sd-element__header--location-top">
-			<h4 aria-label="panel_title" class="sd-title sd-element__title sd-panel__title">
-				<span class="sv-string-viewer">panel_title</span>
-			</h4>
-			<div class="sd-description sd-panel__description">
-				<span class="sv-string-viewer">panel_description</span>
+<div class="sd-clearfix sd-page__row sd-row">
+	<div class="sd-element-wrapper" style="flex:1 1 100%;">
+		<div class="sd-element sd-element--complex sd-element--with-frame sd-panel sd-panel--with-frame sd-row__panel" id="testidp0">
+			<div class="sd-element__header sd-element__header--location-top sd-panel__header">
+				<div class="sd-element__title sd-panel__title sd-title" id="testidp0_ariaTitle">
+					<span class="sv-string-viewer sv-string-viewer--multiline">panel_title</span>
+				</div>
+				<div class="sd-description sd-panel__description">
+					<span class="sv-string-viewer sv-string-viewer--multiline">panel_description</span>
+				</div>
 			</div>
-		</div>
-		<div class="sd-panel__content">
-			<div class="sd-row sd-clearfix">
-				<div style="width: 100%; flex: 1 1 100%; min-width: 300px; max-width: initial;">
-					<div aria-invalid="false" aria-required="false" class="sd-element sd-question sd-row__question sd-row__question--small sd-element--nested" data-name="question1">
-						<div class="sd-question__header sd-element__header sd-question__header--location-top sd-element__header--location-top">
-							<h5 aria-label="Question title" class="sd-title sd-element__title sd-question__title">
-								<span class="sv-string-viewer">Question title</span>
-							</h5>
-							<div class="sd-description sd-question__description">
-								<span class="sv-string-viewer">Question description</span>
+			<div class="sd-element__expandable-content sd-panel__expandable-content">
+				<div aria-labelledby="testidp0_ariaTitle" class="sd-element__content sd-panel__content" id="testidp0_content" role="group">
+					<div class="sd-clearfix sd-row">
+						<div class="sd-element-wrapper sd-element-wrapper--min-width" style="flex:1 1 100%;">
+							<div class="sd-element sd-element--nested sd-question sd-question--nested sd-question--title-top sd-row__question sd-row__question--small" data-name="question1" id="testid0">
+								<div class="sd-question__container">
+									<div class="sd-question__header-and-content-container">
+										<div class="sd-element__header sd-element__header--location-top sd-question__header sd-question__header--location-top">
+											<div class="sd-element__title sd-question__title sd-title" id="testid0_ariaTitle">
+												<span class="sv-string-viewer sv-string-viewer--multiline">Question title</span>
+											</div>
+											<div class="sd-description sd-question__description" id="testid0_ariaDescription">
+												<span class="sv-string-viewer sv-string-viewer--multiline">Question description</span>
+											</div>
+										</div>
+										<div class="sd-question__content sd-question__content--text" role="presentation">
+											<div class="sd-formbox sd-text">
+												<input aria-describedby="testid0_ariaDescription" aria-invalid="false" aria-labelledby="testid0_ariaTitle" aria-required="false" class="sd-formbox__input" id="testid0i" placeholder="" type="text">
+											</div>
+										</div>
+									</div>
+								</div>
 							</div>
-						</div>
-						<div class="sd-question__content" role="presentation">
-							<input aria-invalid="false" aria-label="Question title" aria-required="false" autocomplete="" class="sd-input sd-text" placeholder="" step="any" type="text">
 						</div>
 					</div>
 				</div>

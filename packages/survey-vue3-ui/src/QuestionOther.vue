@@ -1,0 +1,20 @@
+<template>
+  <div :class="question.getCommentAreaCss(true)">
+    <div v-if="question.isViewMode" :class="question.viewModeCssClass">{{ question.getCommentViewText(item) }}</div>
+    <div v-else-if="question.isReadOnlyRenderDiv()">{{ question.getCommentTextAreaModel(item)?.getTextValue() || "" }}</div>
+    <SvComponent
+      :is="'sv-text-area'"
+      v-else
+      :model="question.getCommentTextAreaModel(item)"
+    ></SvComponent>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import type { ItemValue, Question } from "survey-core";
+import SvComponent from "./SvComponent.vue";
+defineProps<{
+  question: Question;
+  item: ItemValue
+}>();
+</script>

@@ -1,0 +1,1539 @@
+import { ComputedUpdater, Base, ArrayChanges, IPropertyArrayValueChangedEvent, IPropertyValueChangedEvent } from "../src/base";
+import { Event, EventAsync } from "../src/event";
+import { ItemValue } from "../src/itemvalue";
+import { ILocalizableOwner, LocalizableString } from "../src/localizablestring";
+import { Serializer } from "../src/jsonobject";
+import { property } from "../src/decorators";
+import { SurveyModel } from "../src/survey";
+import { Action } from "../src/actions/action";
+import { findParentByClassNames } from "../src/utils/dom-utils";
+import { QuestionDropdownModel } from "../src/question_dropdown";
+import { QuestionTextModel } from "../src/question_text";
+import { SurveyElement } from "../src/survey-element";
+import { settings } from "../src/settings";
+import { describe, test, expect, vi } from "vitest";
+export * from "../src/localization/german";
+
+describe("Base", () => {
+  test("Event hasEvents property", () => {
+    var event = new Event<() => any, any, any>();
+    expect(event.isEmpty, "There is no callbacks at the beginning").toBe(true);
+    var func = () => { };
+    event.add(func);
+    expect(event.isEmpty, "a callbacks is added").toBe(false);
+    event.remove(func);
+    expect(event.isEmpty, "a callbacks is removed").toBe(true);
+  });
+  test("Event no parameters", () => {
+    var event = new Event<() => any, any, any>();
+    var counter = 0;
+    var func = () => {
+      counter++;
+    };
+    event.add(func);
+    event.fire(null, null);
+    expect(counter, "function called one time").toBe(1);
+    event.remove(func);
+    event.fire(null, null);
+    expect(counter, "function should not be called the second time").toBe(1);
+  });
+  test("Event with parameters", () => {
+    var event = new Event<(s: number, params) => any, any, any>();
+    var counter = 0;
+    event.add((s: number, params) => {
+      counter += s;
+      params.allow = true;
+    });
+    var options = { allow: false };
+    expect(options.allow, "Initial options.allow == false").toBe(false);
+    event.fire(5, options);
+    expect(options.allow, "function should change allow to true").toBe(true);
+    expect(counter, "function should increase counter on 5").toBe(5);
+  });
+  test("Do not add function with the same instance several times", () => {
+    var event = new Event<() => any, any, any>();
+    var counter = 0;
+    var func = () => {
+      counter++;
+    };
+    event.add(func);
+    event.add(func);
+    event.add(func);
+    event.fire(null, null);
+    expect(counter, "function called one time").toBe(1);
+    event.remove(func);
+    event.fire(null, null);
+    expect(counter, "function should not be called the second time").toBe(1);
+  });
+  test("Add async event", async () => {
+    vi.useFakeTimers();
+    try {
+      interface ResultOptions {
+        counter: number;
+      }
+      const event = new EventAsync<any, ResultOptions>();
+      const func1 = (sender: any, options: ResultOptions): Promise<void> => {
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            options.counter++;
+            resolve();
+          }, 0);
+        });
+      };
+      const func2 = (sender: any, options: ResultOptions): Promise<void> => {
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            options.counter++;
+            resolve();
+          }, 0);
+        });
+      };
+      const options: ResultOptions = { counter: 0 };
+      let completeCounter = 0;
+      let firstAsyncCounter = 0;
+      event.add(func1);
+      event.add(func2);
+      event.fire(null, options, () => completeCounter++, () => firstAsyncCounter++);
+      expect(firstAsyncCounter, "onAsyncCallbacks called one time").toBe(1);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(options.counter, "function called 2 times").toBe(2);
+      expect(firstAsyncCounter, "onAsyncCallbacks called one time #2").toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  test("Add sync functions to async event", () => {
+  interface ResultOptions {
+    counter: number;
+  }
+  const event = new EventAsync<any, ResultOptions>();
+  const func1 = (sender: any, options: ResultOptions) => { options.counter++; };
+  const func2 = (sender: any, options: ResultOptions) => { options.counter++; };
+  const options: ResultOptions = { counter: 0 };
+  event.add(func1);
+  event.add(func2);
+  let completeCounter = 0;
+  let firstAsyncCounter = 0;
+  event.fire(null, options, () => completeCounter++, () => firstAsyncCounter++);
+  expect(options.counter, "function called 2 times").toBe(2);
+  expect(firstAsyncCounter, "onAsyncCallbacks called one time").toBe(0);
+  expect(completeCounter, "onComplete called one time").toBe(1);
+  });
+  test("Item value & dynamic separator, #10424", () => {
+    var value = new ItemValue("Item");
+    expect(value.value, "simple text value").toBe("Item");
+    expect(value.locText.renderedHtml, "get text from value").toBe("Item");
+    value.text = "My text";
+    expect(value.text, "get text from text property").toBe("My text");
+    value.text = null;
+    expect(value.locText.renderedHtml, "get text from value").toBe("Item");
+    value.value = 5;
+    expect(value.locText.renderedHtml, "get text from value and convert it to string").toBe("5");
+    value.value = null;
+    expect(value.value, "value was set to null").toBe(null);
+    expect(value.calculatedText, "text is null if value is null").toBe(null);
+    value.value = "Item|Text Item";
+    expect(value.value, "use the text separator: value").toBe("Item");
+    expect(value.calculatedText, "use the text separator: text").toBe("Text Item");
+    settings.itemValueSeparator = "";
+    value.value = "Item|Text Item";
+    expect(value.value, "do not use the text separator").toBe("Item|Text Item");
+    settings.itemValueSeparator = "|";
+  });
+  test("ItemValue.hasValue: a value of spaces is no value", () => {
+    ["   ", "", null, undefined].forEach((val: any): void => {
+      expect(new ItemValue(val).hasValue, "no value: " + JSON.stringify(val)).toBe(false);
+    });
+    ["a", 0, false].forEach((val: any): void => {
+      expect(new ItemValue(val).hasValue, "a value: " + val).toBe(true);
+    });
+    const item = new ItemValue("   ");
+    item.value = "b";
+    expect(item.hasValue, "follows the value").toBe(true);
+  });
+  test("ItemValue.setData()", () => {
+    var items = new Array<ItemValue>();
+    ItemValue.setData(items, [
+      { value: 7, text: "Item 1" },
+      5,
+      "item",
+      "value1|text1",
+    ]);
+    expect(items.length, "there are 4 items").toBe(4);
+    expect(items[1].value, "set correct value property for the second item").toBe(5);
+    expect(items[1].calculatedText, "set correct text property for the second item").toBe("5");
+    expect(items[2].value, "set correct value property for the third item").toBe("item");
+    expect(items[2].calculatedText, "set correct text property for the third item").toBe("item");
+    expect(items[3].value, "set correct value property for the fourth item").toBe("value1");
+    expect(items[3].calculatedText, "set correct text property for the fourth item").toBe("text1");
+  });
+  test("ItemValue.setData() empty text", () => {
+    var items = new Array<ItemValue>();
+    items.push(new ItemValue(1));
+    items.push(new ItemValue(2));
+    var newItems = new Array<ItemValue>();
+    ItemValue.setData(newItems, items);
+    expect(newItems.length, "there are 2 items").toBe(2);
+    expect(newItems[0].value, "the first value is 1").toBe(1);
+    expect(newItems[0].hasText, "There is no text").toBe(false);
+  });
+  test("ItemValue.setData() boolean", () => {
+    var items = new Array<ItemValue>();
+    ItemValue.setData(items, [
+      { value: true, text: "Yes" },
+      { value: false, text: "No" },
+    ]);
+    expect(items.length, "there are 2 items").toBe(2);
+    expect(items[0].value, "set correct value property for the first item").toBe(true);
+    expect(items[0].calculatedText, "set correct text property for the first item").toBe("Yes");
+    expect(items[1].value, "set correct value property for the second item").toBe(false);
+    expect(items[1].calculatedText, "set correct text property for the second item").toBe("No");
+  });
+  test("ItemValue.setData() ItemValue with type", () => {
+    Serializer.addClass("imageitemvalue1", [], null, "itemvalue");
+    var items = new Array<ItemValue>();
+    var data = [
+      new ItemValue(true, "Yes", "imageitemvalue1"),
+      new ItemValue(false, "No", "imageitemvalue1"),
+    ];
+    ItemValue.setData(items, data);
+    expect(items.length, "there are 2 items").toBe(2);
+    expect(items[0].value, "set correct value property for the first item").toBe(true);
+    expect(items[0].text, "set correct text property for the first item").toBe("Yes");
+    expect(items[1].value, "set correct value property for the second item").toBe(false);
+    expect(items[1].text, "set correct text property for the second item").toBe("No");
+  });
+  test("ItemValue.getData()", () => {
+    var items = new Array<ItemValue>();
+    items.push(new ItemValue(7, "Item 1"));
+    items.push(new ItemValue(5));
+    items.push(new ItemValue("item"));
+    var data = ItemValue.getData(items);
+    ItemValue.setData(items, [{ value: 7, text: "Item 1" }, 5, "item"]);
+    expect(data, "convert some items to simple values").toEqual([{ value: 7, text: "Item 1" }, 5, "item"]);
+    var item = new ItemValue(1);
+    expect(item.getData(), "Just value").toBe(1);
+    item.visibleIf = "{item}=1";
+    expect(item.getData(), "Object value + visibleIf").toEqual({ value: 1, visibleIf: "{item}=1" });
+  });
+  test("ItemValue.getItemByValue()", () => {
+    var items = new Array<ItemValue>();
+    items.push(new ItemValue(7, "Item 1"));
+    items.push(new ItemValue(5));
+    items[1]["custom"] = "mydata";
+    items.push(new ItemValue("item"));
+    var item = ItemValue.getItemByValue(items, 5);
+    expect(item.value, "find item correctly").toBe(5);
+    expect(item["custom"], "get custom data correctly").toBe("mydata");
+    item = ItemValue.getItemByValue(items, 55);
+    expect(item, "there is no item by this value").toBe(null);
+    items.push(new ItemValue("", "empty"));
+    item = ItemValue.getItemByValue(items, undefined);
+    expect(item.text, "returns empty value").toBe("empty");
+  });
+
+  test("ItemValue.locText property on demand", () => {
+    const hasLocText = (item: ItemValue): boolean => {
+      return !!item["locTextValue"];
+    };
+    const item = new ItemValue(1);
+    expect(hasLocText(item), "locText is not created #1").toBeFalsy();
+    expect(item.textOrHtml, "textOrHtml is 1").toBe("1");
+    expect(item.hasText, "has text is false").toBe(false);
+    expect(item.toJSON(), "toJSON is correct").toEqual({ value: 1 });
+    expect(hasLocText(item), "locText is not created #2").toBeFalsy();
+    item.text = "abc";
+    expect(hasLocText(item), "locText is not created #3").toBeTruthy();
+  });
+
+  class BaseTester extends Base implements ILocalizableOwner {
+    constructor() {
+      super();
+      var self = this;
+      this.createNewArray(
+        "items",
+        function (newItem) {
+          newItem.isNew = true;
+        },
+        function (deletedItem) {
+          deletedItem.isDeleted = true;
+        }
+      );
+      this.createLocalizableString("title");
+    }
+    public get value1(): number {
+      return this.getPropertyValue("value1", 1);
+    }
+    public set value1(val: number) {
+      this.setPropertyValue("value1", val);
+    }
+    public get items(): Array<any> {
+      return this.getPropertyValue("items");
+    }
+    public get title(): string {
+      return this.getLocalizableStringText("title", "default");
+    }
+    public set title(val: string) {
+      this.setLocalizableStringText("title", val);
+    }
+    getLocale(): string {
+      return "en";
+    }
+    getMarkdownHtml(text: string): string {
+      return text;
+    }
+    getRenderer(name: string): string {
+      return undefined;
+    }
+    getRendererContext(locStr: LocalizableString): any {
+      return undefined;
+    }
+    getProcessedText(text: string): string {
+      return text;
+    }
+  }
+
+  // The callbacks only record their arguments, so the items of the array can be primitives.
+  class ArrayRecorder extends Base {
+    public pushed: Array<[any, number]> = [];
+    public removed: Array<any> = [];
+    public propertyChanges: Array<ArrayChanges> = [];
+    public arrayChanges: Array<ArrayChanges> = [];
+    constructor(items: Array<any> = []) {
+      super();
+      this.createNewArray(
+        "items",
+        (item: any, index: number): void => { this.pushed.push([item, index]); },
+        (item: any): void => { this.removed.push(item); }
+      );
+      this.setPropertyValue("items", items);
+      this.pushed = [];
+      this.onPropertyChanged.add((_, options) => { this.propertyChanges.push(options.arrayChanges); });
+      this.addOnArrayChangedCallback((_, options) => { this.arrayChanges.push(options.arrayChanges); });
+    }
+    public get items(): Array<any> {
+      return this.getPropertyValue("items");
+    }
+    public get plainItems(): Array<any> {
+      return this.items.slice();
+    }
+  }
+  function expectOneArrayChange(base: ArrayRecorder, expected: ArrayChanges, name: string): void {
+    expect(base.propertyChanges, name + ", onPropertyChanged").toEqual([expected]);
+    expect(base.arrayChanges, name + ", onArrayChanged").toEqual([expected]);
+  }
+  function expectNoArrayChange(base: ArrayRecorder, name: string): void {
+    expect(base.pushed, name + ", no onPush").toEqual([]);
+    expect(base.removed, name + ", no onRemove").toEqual([]);
+    expect(base.propertyChanges, name + ", no onPropertyChanged").toEqual([]);
+    expect(base.arrayChanges, name + ", no onArrayChanged").toEqual([]);
+  }
+
+  test("Base simple propety value", () => {
+    var base = new BaseTester();
+    var counter = 0;
+    var propertyName;
+    var oldValue, newValue;
+    base.onPropertyChanged.add(function (sender, options) {
+      counter++;
+      propertyName = options.name;
+      oldValue = options.oldValue;
+      newValue = options.newValue;
+    });
+    expect(base.value1, "Use the default value").toBe(1);
+    base.value1 = 5;
+    expect(base.value1, "It has been assign correctly").toBe(5);
+    expect(counter, "event called one time").toBe(1);
+    expect(propertyName, "value1 has been changed").toBe("value1");
+    expect(oldValue, "oldValue is undefined").toBeFalsy();
+    expect(newValue, "newValue is 5").toBe(5);
+  });
+
+  test("Base hash values - get/set PropertyValueCoreHandler", () => {
+    var base = new BaseTester();
+    var counter = 0;
+    var val;
+    base.setPropertyValueCoreHandler = (h, k, v) => {
+      counter++;
+      val = v;
+    };
+    base.getPropertyValueCoreHandler = (h, k) => {
+      counter++;
+      return val;
+    };
+
+    base.value1 = 5;
+    expect(counter).toBe(2);
+    expect(val).toBe(5);
+    expect(base.value1).toBe(5);
+    expect(counter).toBe(3);
+  });
+  test("Base hash values - onPropertyValueCoreChanged event", () => {
+    var base = new BaseTester();
+    const names = new Array<string>();
+    const onPropertyValueChanged = (sender: Base, options: IPropertyValueChangedEvent) => {
+      names.push(options.name);
+    };
+    base.addOnPropertyValueChangedCallback(onPropertyValueChanged);
+    expect(names.length).toBe(0);
+    base.value1 = 5;
+    expect(names, "#1").toEqual(["value1"]);
+    base.value1 = 5;
+    expect(names, "#2").toEqual(["value1"]);
+    base.value1 = 7;
+    expect(names, "#3").toEqual(["value1", "value1"]);
+    base.removeOnPropertyValueChangedCallback(onPropertyValueChanged);
+    base.value1 = 10;
+    expect(names, "#4").toEqual(["value1", "value1"]);
+  });
+  test("Base hash values - onPropertyValueCoreChanged event, do not call on caculdated function", () => {
+    class BaseTesterWithCalc extends BaseTester {
+      public get value1(): number {
+        return this.getPropertyValue("value1", 1);
+      }
+      public get value2(): number {
+        return this.getPropertyValue("value2", undefined, () => this.value1 + 1);
+      }
+    }
+    const base = new BaseTesterWithCalc();
+    const names = new Array<string>();
+    const onPropertyValueChanged = (sender: Base, options: IPropertyValueChangedEvent) => {
+      names.push(options.name);
+    };
+    base.addOnPropertyValueChangedCallback(onPropertyValueChanged);
+    expect(names.length).toBe(0);
+    expect(base.value2, "initial calculated value").toBe(2);
+    expect(names.length).toBe(0);
+    base.setPropertyValue("value1", 5);
+    expect(names, "#1").toEqual(["value1"]);
+    expect(base.value2, "calculated value is not changed").toBe(2);
+    expect(names, "#2").toEqual(["value1"]);
+    base.setPropertyValue("value2", 15);
+    expect(names, "#3").toEqual(["value1", "value2"]);
+    expect(base.value2, "set value").toBe(15);
+    expect(names, "#4").toEqual(["value1", "value2"]);
+  });
+
+  test("Base localizable string", () => {
+    var base = new BaseTester();
+    var counter = 0;
+    var propertyName;
+    var oldValue, newValue;
+    base.onPropertyChanged.add(function (sender, options) {
+      counter++;
+      propertyName = options.name;
+      oldValue = options.oldValue;
+      newValue = options.newValue;
+    });
+    expect(base.title, "Use the default value").toBe("default");
+    base.title = "value1";
+    expect(base.title, "It has been assign correctly").toBe("value1");
+    expect(counter, "event called one time").toBe(1);
+    expect(propertyName, "title has been changed").toBe("title");
+    expect(oldValue, "oldValue is undefined").toBeFalsy();
+    expect(newValue, "newValue is value1").toBe("value1");
+  });
+
+  test("Base array propety value, push/splice/pop", () => {
+    var base = new BaseTester();
+    var counter = 0;
+    var propertyName;
+    base.onPropertyChanged.add(function (sender, options) {
+      counter++;
+      propertyName = options.name;
+    });
+    base.items.push({ value: 1 });
+    expect(base.items.length, "There is one item").toBe(1);
+    expect(base.items[0].isNew, "isNew property is set").toBe(true);
+    expect(counter, "event called one time").toBe(1);
+    expect(propertyName, "items has been changed").toBe("items");
+    var item = base.items[0];
+    base.items.splice(0, 1, { value: 2 }, { value: 3 });
+    expect(base.items.length, "There are two items").toBe(2);
+    expect(item.isDeleted, "First Item is deleted").toBe(true);
+    expect(base.items[0].isNew, "Item1, isNew property is set").toBe(true);
+    expect(base.items[1].isNew, "Item2, isNew property is set").toBe(true);
+    expect(counter, "event called two times").toBe(2);
+    expect(propertyName, "items has been changed").toBe("items");
+
+    item = base.items[0];
+    base.items.pop();
+    base.items.pop();
+    expect(base.items.length, "There is no items").toBe(0);
+    expect(item.isDeleted, "Item is deleted").toBe(true);
+    expect(counter, "event called 4 times, pop is called two times").toBe(4);
+    expect(propertyName, "items has been changed").toBe("items");
+  });
+  test("Base array propety value, the onPush index of push and unshift", () => {
+    class IndexTester extends Base {
+      public indexes: Array<number> = [];
+      constructor() {
+        super();
+        this.createNewArray("items", (item: any, index: number): void => { this.indexes.push(index); });
+      }
+      public get items(): Array<any> {
+        return this.getPropertyValue("items");
+      }
+    }
+    const base = new IndexTester();
+    base.items.push({ value: 1 });
+    base.items.push({ value: 2 });
+    expect(base.indexes, "#1: push, the last index").toEqual([0, 1]);
+    base.items.unshift({ value: 0 });
+    expect(base.items[0].value, "#2: unshift adds at the start").toBe(0);
+    expect(base.indexes, "#3: unshift, index 0").toEqual([0, 1, 0]);
+  });
+  test("Base live array, push adds every item with one notification", () => {
+    const base = new ArrayRecorder(["a"]);
+    expect(base.items.push("b", "c"), "the new length").toBe(3);
+    expect(base.plainItems, "both items are added in order").toEqual(["a", "b", "c"]);
+    expect(base.pushed, "onPush gets the final indexes").toEqual([["b", 1], ["c", 2]]);
+    expectOneArrayChange(base, new ArrayChanges(1, 0, ["b", "c"], []), "push");
+  });
+  test("Base live array, unshift adds every item with one notification", () => {
+    const base = new ArrayRecorder(["a"]);
+    expect(base.items.unshift("b", "c"), "the new length").toBe(3);
+    expect(base.plainItems, "both items are added in order").toEqual(["b", "c", "a"]);
+    expect(base.pushed, "onPush gets the final indexes").toEqual([["b", 0], ["c", 1]]);
+    expectOneArrayChange(base, new ArrayChanges(0, 0, ["b", "c"], []), "unshift");
+  });
+  test.each(["push", "unshift"])("Base live array, %s without items changes nothing", (method: string) => {
+    const base = new ArrayRecorder(["a"]);
+    expect(base.items[method](), "the length is not changed").toBe(1);
+    expect(base.plainItems, "no undefined is added").toEqual(["a"]);
+    expectNoArrayChange(base, method);
+  });
+  test.each<[string, Array<any>, number]>([
+    ["splice(0)", [0], 0],
+    ["splice(undefined)", [undefined], 0],
+    ["splice(1)", [1], 1],
+    ["splice(1, undefined)", [1, undefined], 1],
+    ["splice(-1)", [-1], 2],
+    ["splice(-1, 1, x)", [-1, 1, "x"], 2],
+    ["splice(-1.5, 1, x)", [-1.5, 1, "x"], 2],
+    ["splice(-0.5, 1, x)", [-0.5, 1, "x"], 0],
+    ["splice(1.9, 1, x, y)", [1.9, 1, "x", "y"], 1],
+    ["splice(-5, 1)", [-5, 1], 0],
+    ["splice(NaN, 1)", [NaN, 1], 0],
+    ["splice(-Infinity, 1)", [-Infinity, 1], 0],
+    ["splice(Infinity, 0, x)", [Infinity, 0, "x"], 3],
+    ["splice(5)", [5], 3],
+    ["splice()", [], 0],
+    ["splice(1, 0)", [1, 0], 1],
+  ])("Base live array, %s on 3 items works as the native one", (name: string, args: Array<any>, index: number) => {
+    const plain: any = ["a", "b", "c"];
+    const expectedResult = plain.splice(...args);
+    const base = new ArrayRecorder(["a", "b", "c"]);
+    const items: any = base.items;
+    expect(items.splice(...args), "the removed items").toEqual(expectedResult);
+    expect(base.plainItems, "the array").toEqual(plain);
+    const added = args.slice(2);
+    expect(base.pushed, "onPush").toEqual(added.map((item: any, i: number) => [item, index + i]));
+    expect(base.removed, "onRemove").toEqual(expectedResult);
+    expectOneArrayChange(base, new ArrayChanges(index, expectedResult.length, added, expectedResult), name);
+  });
+  test("Base live array, pop reports the removed item and its slot", () => {
+    const base = new ArrayRecorder(["a", "b", "c"]);
+    expect(base.items.pop(), "the removed item").toBe("c");
+    expect(base.removed, "onRemove").toEqual(["c"]);
+    expectOneArrayChange(base, new ArrayChanges(2, 1, [], ["c"]), "pop");
+  });
+  test("Base live array, shift reports the removed item and its slot", () => {
+    const base = new ArrayRecorder(["a", "b", "c"]);
+    expect(base.items.shift(), "the removed item").toBe("a");
+    expect(base.removed, "onRemove").toEqual(["a"]);
+    expectOneArrayChange(base, new ArrayChanges(0, 1, [], ["a"]), "shift");
+  });
+  test("Base live array, shift removes and reports a falsy item", () => {
+    const base = new ArrayRecorder([0, 1]);
+    expect(base.items.shift(), "the removed item").toBe(0);
+    expect(base.removed, "onRemove").toEqual([0]);
+    expectOneArrayChange(base, new ArrayChanges(0, 1, [], [0]), "shift");
+  });
+  test("Base live array, pop removes and reports a falsy item", () => {
+    const base = new ArrayRecorder([1, 0]);
+    expect(base.items.pop(), "the removed item").toBe(0);
+    expect(base.removed, "onRemove").toEqual([0]);
+    expectOneArrayChange(base, new ArrayChanges(1, 1, [], [0]), "pop");
+  });
+  test("Base live array, shift removes and reports an undefined item", () => {
+    const base = new ArrayRecorder([undefined, 1]);
+    expect(base.items.shift(), "the removed item").toBeUndefined();
+    expect(base.plainItems, "the array").toEqual([1]);
+    expect(base.removed, "onRemove").toEqual([undefined]);
+    expectOneArrayChange(base, new ArrayChanges(0, 1, [], [undefined]), "shift");
+  });
+  test.each(["pop", "shift"])("Base live array, %s on an empty array does nothing", (method: string) => {
+    const base = new ArrayRecorder();
+    expect(base.items[method](), "nothing is removed").toBeUndefined();
+    expectNoArrayChange(base, method);
+  });
+  test.each<[string, (items: Array<any>) => void]>([
+    ["push(x, y)", (items) => items.push("x", "y")],
+    ["unshift(x, y)", (items) => items.unshift("x", "y")],
+    ["pop()", (items) => items.pop()],
+    ["shift()", (items) => items.shift()],
+    ["splice(1)", (items) => items.splice(1)],
+    ["splice(-2, 1, x, y)", (items) => items.splice(-2, 1, "x", "y")],
+    ["splice(-1.5, 1, x)", (items) => items.splice(-1.5, 1, "x")],
+  ])("Base live array, the reported changes of %s undo it the way the Creator does", (name: string, change: (items: Array<any>) => void) => {
+    const base = new ArrayRecorder(["a", "b", "c", "d"]);
+    change(base.items);
+    const changes = base.arrayChanges[0];
+    const copy = base.plainItems;
+    copy.splice(changes.index, changes.itemsToAdd.length, ...changes.deletedItems);
+    expect(copy, name).toEqual(["a", "b", "c", "d"]);
+  });
+  test("Base live array, a disposed owner still changes the array and notifies nobody", () => {
+    const base = new ArrayRecorder(["a", "b", "c"]);
+    const items = base.items;
+    base.dispose();
+    items.push("d");
+    items.unshift("e");
+    items.pop();
+    items.shift();
+    items.splice(1, 1, "f");
+    expect(items.slice(), "the array").toEqual(["a", "f", "c"]);
+    expectNoArrayChange(base, "disposed");
+  });
+  test("Base array propety value, set value", () => {
+    var base = new BaseTester();
+    var counter = 0;
+    var propertyName;
+    base.onPropertyChanged.add(function (sender, options) {
+      counter++;
+      propertyName = options.name;
+    });
+    base.setPropertyValue("items", [{ value1: 1 }, { value2: 2 }]);
+    expect(base.items.length, "There are two items").toBe(2);
+    expect(base.items[0].isNew, "first item, isNew property is set").toBe(true);
+    expect(base.items[1].isNew, "second item, isNew property is set").toBe(true);
+    expect(counter, "event called one time").toBe(1);
+    expect(propertyName, "items has been changed").toBe("items");
+
+    base.items.push({ value: 3 });
+    expect(base.items.length, "There are 3 items").toBe(3);
+    expect(base.items[2].isNew, "The third  item, isNew property is set").toBe(true);
+    expect(counter, "event called two times").toBe(2);
+  });
+
+  test("Base onPropertyValueChangedCallback", () => {
+    var base = new BaseTester();
+    var counter = 0;
+
+    base.onPropertyValueChangedCallback = (
+      name: string,
+      oldValue: any,
+      newValue: any,
+      sender: Base,
+      arrayChanges: ArrayChanges
+    ) => {
+      counter++;
+    };
+
+    expect(counter, "initial").toBe(0);
+
+    base.setPropertyValue("some", "some");
+
+    expect(counter, "callback called").toBe(1);
+  });
+
+  test("Base propertyValueChanged itemValue", () => {
+    var itemValue = new ItemValue("Item");
+    var counter = 0;
+
+    itemValue.onPropertyValueChangedCallback = (
+      name: string,
+      oldValue: any,
+      newValue: any,
+      sender: Base,
+      arrayChanges: ArrayChanges
+    ) => {
+      counter++;
+    };
+
+    expect(counter, "initial").toBe(0);
+
+    itemValue.text = "new";
+
+    expect(counter, "callback called").toBe(1);
+  });
+
+  test("Base propertyValueChanged colOwner - column undo/redo", () => {
+    var survey = new SurveyModel({
+      elements: [
+        {
+          type: "matrixdropdown",
+          name: "q1",
+          columns: [{ name: "col1" }],
+          rows: [1, 2],
+        },
+      ],
+    });
+    var matrix = <any>survey.getQuestionByName("q1");
+    var counter1 = 0;
+    var counter2 = 0;
+    survey.onPropertyValueChangedCallback = (
+      name: string,
+      oldValue: any,
+      newValue: any,
+      sender: Base,
+      arrayChanges: ArrayChanges
+    ) => {
+      if (name == "name" && oldValue == "col1" && newValue == "col2") counter1++;
+      if (name == "value") counter2++;
+    };
+
+    expect(counter1, "initial").toBe(0);
+    expect(counter2, "initial").toBe(0);
+    matrix.columns[0].name = "col2";
+    expect(counter1, "callback colOwner called").toBe(1);
+    expect(counter2, "callback locOwner not called").toBe(0);
+    matrix.rows[0].value = 3;
+    expect(counter1, "callback colOwner is the same").toBe(1);
+    expect(counter2, "callback locOwner called").toBe(1);
+  });
+  test("Base onArrayChanged", () => {
+    const base = new BaseTester();
+    let counter = 0;
+    let arrayChanges: ArrayChanges = null;
+    expect((base as any).onArrayChanged, "#1").toBe(undefined);
+    const callback = (_: Base, options: IPropertyArrayValueChangedEvent) => {
+      arrayChanges = options.arrayChanges;
+      counter++;
+    };
+    base.addOnArrayChangedCallback(callback);
+    expect(counter, "initial").toBe(0);
+    base.items.push(new ItemValue(1));
+
+    expect(counter, "onArrayChanged is changed").toBe(1);
+    expect(arrayChanges.index, "added into 0 index").toBe(0);
+    expect(arrayChanges.itemsToAdd, "added items").toEqual([base.items[0]]);
+
+    base.removeOnArrayChangedCallback(callback);
+    expect((base as any).onArrayChanged).toBe(undefined);
+    base.items.push(new ItemValue(1));
+    expect(counter, "onArrayChanged is not changed").toBe(1);
+  });
+  test("Change value to array and then to undefined", () => {
+    var base = new Base();
+    base.setPropertyValue("testValue", [1, 2, 3]);
+    expect(base.getPropertyValue("testValue")).toEqual([1, 2, 3]);
+    base.setPropertyValue("testValue", undefined);
+    expect(base.getPropertyValue("testValue")).toBeFalsy();
+  });
+  test("Change value to array and then to string", () => {
+    var base = new BaseTester();
+    base.setPropertyValue("testValue", [1, 2, 3]);
+    expect(base.getPropertyValue("testValue")).toEqual([1, 2, 3]);
+    base.setPropertyValue("testValue", "abc");
+    expect(base.getPropertyValue("testValue")).toBe("abc");
+  });
+
+  class BaseTester1 extends Base {
+  @property({ defaultValue: 1 }) propA: number;
+  @property() propS: string;
+  }
+  class BaseTester2 extends Base {
+  @property({ defaultValue: 2 }) propB: number;
+  }
+  class BaseTester3 extends Base {
+  @property() propC: number;
+  }
+  class BaseTester4 extends Base {
+    getMarkdownHtml = (val) => val;
+  @property() propC: string;
+  @property({ localizable: true }) propL: string;
+  }
+  test("Collect dependencies", () => {
+    const base1 = new BaseTester1();
+    const base2 = new BaseTester2();
+    const calc = () => base1.propA + base2.propB;
+    const base3 = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = () => {
+      base3.propC = calc();
+      updaterCallCount++;
+    };
+
+    Base.startCollectDependencies(updater, base3, "propC");
+    updater();
+    const deps = Base.finishCollectDependencies();
+    expect(deps.dependencies.length, "two dependencies").toBe(2);
+    expect(deps.dependencies[0].obj).toBe(base1);
+    expect(deps.dependencies[0].prop).toBe("propA");
+    expect(deps.dependencies[1].obj).toBe(base2);
+    expect(deps.dependencies[1].prop).toBe("propB");
+
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    expect(base3.propC).toBe(3);
+    base1.propA = 2;
+    expect(updaterCallCount, "propA changed").toBe(2);
+    expect(base3.propC).toBe(4);
+    base2.propB = 3;
+    expect(updaterCallCount, "propB changed").toBe(3);
+    expect(base3.propC).toBe(5);
+
+    deps.dispose();
+    base1.propA = 1;
+    expect(updaterCallCount, "no updater calls").toBe(3);
+    expect(base3.propC, "no value updates").toBe(5);
+  });
+  test("Collect dependencies: question properties outside loading are collected in order", () => {
+    const survey = new SurveyModel({ elements: [{ type: "text", name: "q1" }] });
+    const q = <QuestionTextModel>survey.getQuestionByName("q1");
+    const base3 = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = () => {
+      base3.propC = (q.isRequired ? 1 : 0) + (q.startWithNewLine ? 2 : 0);
+      updaterCallCount++;
+    };
+
+    Base.startCollectDependencies(updater, base3, "propC");
+    updater();
+    const deps = Base.finishCollectDependencies();
+    expect(deps.dependencies.map(d => d.prop), "two dependencies in order").toEqual(["isRequired", "startWithNewLine"]);
+    expect(deps.dependencies[0].obj).toBe(q);
+    expect(deps.dependencies[1].obj).toBe(q);
+
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    expect(base3.propC).toBe(2);
+    q.isRequired = true;
+    expect(updaterCallCount, "isRequired changed").toBe(2);
+    expect(base3.propC).toBe(3);
+    q.startWithNewLine = false;
+    expect(updaterCallCount, "startWithNewLine changed").toBe(3);
+    expect(base3.propC).toBe(1);
+    deps.dispose();
+  });
+  test("Collect dependencies: question properties while the survey is loading are not collected", () => {
+    const survey = new SurveyModel({ elements: [{ type: "text", name: "q1" }] });
+    const q = <QuestionTextModel>survey.getQuestionByName("q1");
+    const base3 = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = () => {
+      base3.propC = (q.isRequired ? 1 : 0) + (q.startWithNewLine ? 2 : 0);
+      updaterCallCount++;
+    };
+
+    survey.startLoadingFromJson();
+    Base.startCollectDependencies(updater, base3, "propC");
+    updater();
+    const deps = Base.finishCollectDependencies();
+    // endLoadingFromJson starts the width-mode collection, so it must run after finishCollectDependencies
+    survey.endLoadingFromJson();
+    expect(deps.dependencies.length, "no dependencies").toBe(0);
+    q.isRequired = true;
+    expect(updaterCallCount, "not subscribed").toBe(1);
+    deps.dispose();
+  });
+  test("Property reads outside a dependency collection do not check the loading state", () => {
+    const survey = new SurveyModel({ elements: [{ type: "text", name: "q1" }] });
+    const q = <QuestionTextModel>survey.getQuestionByName("q1");
+    const readAll = () => [q.name, q.isRequired, q.startWithNewLine, q.readOnly, q.width, q.minWidth,
+      q.maxWidth, q.indent, q.valueName, q.visibleIf];
+    readAll();
+    const getterSpy = vi.spyOn(Base.prototype, "isLoadingFromJson", "get");
+    const elementSpy = vi.spyOn(SurveyElement.prototype as any, "getIsLoadingFromJson");
+    try {
+      readAll();
+      // Before the check for a running collection, 10 reads made 20 getter calls (the question, then its survey)
+      // and 10 getIsLoadingFromJson calls
+      expect(getterSpy, "isLoadingFromJson getter").toHaveBeenCalledTimes(0);
+      expect(elementSpy, "SurveyElement.getIsLoadingFromJson").toHaveBeenCalledTimes(0);
+    } finally {
+      getterSpy.mockRestore();
+      elementSpy.mockRestore();
+    }
+  });
+  class BaseTester5 extends Base {
+  @property({ defaultValue: 1 }) propA: number;
+  @property({ defaultValue: 2 }) propB: number;
+  }
+  const depsToArray = (updater: ComputedUpdater): Array<{ obj: Base, prop: string }> =>
+    updater["dependencies"].dependencies.map(d => ({ obj: d.obj, prop: d.prop }));
+  test("Collect dependencies: a property read twice is one dependency", () => {
+    const a = new BaseTester5();
+    const b = new BaseTester5();
+    const target = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<number>(() => {
+      updaterCallCount++;
+      return a.propA + b.propA + a.propA + a.propB;
+    });
+    target.propC = <any>updater;
+    expect(depsToArray(updater), "three dependencies in reading order").toEqual([
+      { obj: a, prop: "propA" }, { obj: b, prop: "propA" }, { obj: a, prop: "propB" }]);
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    a.propA = 3;
+    expect(updaterCallCount, "a.propA changed, updater runs once").toBe(2);
+    expect(target.propC, "3 + 1 + 3 + 2").toBe(9);
+    updater.dispose();
+  });
+  test("Collect dependencies: two objects with equal names are two dependencies", () => {
+    const a = new QuestionTextModel("q");
+    const b = new QuestionTextModel("q");
+    const target = new BaseTester4();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<string>(() => {
+      updaterCallCount++;
+      return a.title + "," + b.title;
+    });
+    target.propC = <any>updater;
+    expect(depsToArray(updater), "name and title of both questions").toEqual([
+      { obj: a, prop: "name" }, { obj: a, prop: "title" }, { obj: b, prop: "name" }, { obj: b, prop: "title" }]);
+    expect(target.propC).toBe("q,q");
+    a.title = "A";
+    expect(updaterCallCount, "a.title changed").toBe(2);
+    expect(target.propC).toBe("A,q");
+    b.title = "B";
+    expect(updaterCallCount, "b.title changed").toBe(3);
+    expect(target.propC).toBe("A,B");
+    updater.dispose();
+  });
+  test("Collect dependencies: many dependencies", () => {
+    const objs: Array<BaseTester5> = [];
+    for (let i = 0; i < 2000; i++) objs.push(new BaseTester5());
+    const target = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<number>(() => {
+      updaterCallCount++;
+      let res = 0;
+      objs.forEach(o => { res += o.propA + o.propB + o.propA + o.propB; });
+      return res;
+    });
+    target.propC = <any>updater;
+    const deps = depsToArray(updater);
+    expect(deps.length, "two dependencies per object").toBe(4000);
+    expect(deps[3998], "last object propA").toEqual({ obj: objs[1999], prop: "propA" });
+    expect(deps[3999], "last object propB").toEqual({ obj: objs[1999], prop: "propB" });
+    expect(target.propC).toBe(2000 * 6);
+    objs[1999].propB = 4;
+    expect(updaterCallCount, "last object propB changed, updater runs once").toBe(2);
+    expect(target.propC).toBe(2000 * 6 + 4);
+    updater.dispose();
+    expect(objs.filter(o => o["onPropChangeFunctions"].length > 0).length, "no handlers left").toBe(0);
+    objs[0].propA = 5;
+    expect(updaterCallCount, "no updater calls after dispose").toBe(2);
+  });
+  test("Collect dependencies: adding a dependency does not scan the collected dependencies", () => {
+    const collect = (count: number): { length: number, indexReads: number } => {
+      const objs: Array<BaseTester5> = [];
+      for (let i = 0; i < count; i++) objs.push(new BaseTester5());
+      const target = new BaseTester5();
+      const updater = () => {
+        objs.forEach(o => { o.propA; o.propB; o.propA; o.propB; });
+      };
+      let indexReads = 0;
+      let deps;
+      Base.startCollectDependencies(updater, target, "propA");
+      try {
+        const running = Base["currentDependencis"];
+        let reads = 0;
+        running.dependencies = new Proxy(running.dependencies, {
+          get: (arr, key, receiver) => {
+            if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+            return Reflect.get(arr, key, receiver);
+          }
+        });
+        updater();
+        indexReads = reads;
+      } finally {
+        deps = Base.finishCollectDependencies();
+        deps.dispose();
+      }
+      return { length: deps.dependencies.length, indexReads: indexReads };
+    };
+    const small = collect(50);
+    expect(small.length, "two dependencies per object, 50 objects").toBe(100);
+    // A scan for a duplicate on every read made 10,000 index reads here
+    expect(small.indexReads, "index reads while collecting, 50 objects").toBe(0);
+    const large = collect(100);
+    expect(large.length, "two dependencies per object, 100 objects").toBe(200);
+    expect(large.indexReads, "index reads while collecting, 100 objects").toBe(0);
+  });
+  test("Collect dependencies: survey width mode follows a late element", () => {
+    const pages: Array<any> = [];
+    for (let i = 0; i < 300; i++) pages.push({ elements: [{ type: "text", name: "q" + i }] });
+    const survey = new SurveyModel({ pages });
+    const lastPage = survey.pages[299];
+    survey.currentPage = lastPage;
+    expect(survey.calculatedWidthMode, "one question per page").toBe("static");
+    const q = lastPage.addNewQuestion("text", "q300");
+    q.startWithNewLine = false;
+    expect(survey.calculatedWidthMode, "two questions in a row on the last page").toBe("responsive");
+    lastPage.removeElement(q);
+    expect(survey.calculatedWidthMode, "the question is removed").toBe("static");
+  });
+  test("Collect dependencies automatically", () => {
+    const base1 = new BaseTester1();
+    const base2 = new BaseTester2();
+    const base3 = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<number>(() => {
+      updaterCallCount++;
+      return base1.propA + base2.propB;
+    });
+    base3.propC = <any>updater;
+
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    expect(base3.propC, "1 + 2").toBe(3);
+    base1.propA = 2;
+    expect(updaterCallCount, "propA changed").toBe(2);
+    expect(base3.propC, "2 + 2").toBe(4);
+    base2.propB = 3;
+    expect(updaterCallCount, "propB changed").toBe(3);
+    expect(base3.propC, "2 + 3").toBe(5);
+
+    updater.dispose();
+    base1.propA = 1;
+    expect(updaterCallCount, "no updater calls").toBe(3);
+    expect(base3.propC, "no value updates").toBe(5);
+  });
+  test("Action visibility update", () => {
+    const base1 = new BaseTester1();
+    const base2 = new BaseTester2();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<boolean>(() => {
+      updaterCallCount++;
+      const isProp2 = !!base2.propB;
+      return !!base1.propA && isProp2;
+    });
+    base1.propA = 0;
+    base2.propB = 1;
+    const action = new Action(<any>{
+      visible: <any>updater,
+    });
+
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    expect(action.visible).toBe(false);
+    base1.propA = 1;
+    expect(updaterCallCount, "propA changed to true").toBe(2);
+    expect(action.visible).toBe(true);
+    base2.propB = 0;
+    expect(updaterCallCount, "propB changed to false").toBe(3);
+    expect(action.visible).toBe(false);
+    base2.propB = 1;
+    expect(updaterCallCount, "propB changed to true").toBe(4);
+    expect(action.visible).toBe(true);
+
+    updater.dispose();
+    base1.propA = 0;
+    expect(updaterCallCount, "no updater calls").toBe(4);
+    expect(action.visible).toBe(true);
+  });
+  test("Action enable active update same function", () => {
+    const base1 = new BaseTester1();
+    let updaterCallCount1 = 0;
+    let updaterCallCount2 = 0;
+    base1.propA = 0;
+    const updater1 = new ComputedUpdater<boolean>(() => {
+      updaterCallCount1++;
+      return !!base1.propA;
+    });
+    const updater2 = new ComputedUpdater<boolean>(() => {
+      updaterCallCount2++;
+      return !!base1.propA;
+    });
+    const action = new Action(<any>{
+      active: <any>updater1,
+      enabled: <any>updater2,
+    });
+
+    const dependencies1 = updater1["dependencies"];
+    expect(dependencies1.dependencies.length, "active dependencies count = 1").toBe(1);
+    const dependencies2 = updater1["dependencies"];
+    expect(dependencies2.dependencies.length, "enabled dependencies count = 1").toBe(1);
+
+    expect(updaterCallCount1, "first time calculation - active").toBe(1);
+    expect(updaterCallCount2, "first time calculation - enabled").toBe(1);
+    expect(action.active, "active 1").toBe(false);
+    expect(action.enabled, "enabled 1").toBe(false);
+    base1.propA = 1;
+    expect(updaterCallCount1, "propA changed to true - active").toBe(2);
+    expect(updaterCallCount2, "propA changed to true - enabled").toBe(2);
+    expect(action.active, "active 2").toBe(true);
+    expect(action.enabled, "enabled 2").toBe(true);
+    base1.propA = 0;
+    expect(updaterCallCount1, "propA changed to false - active").toBe(3);
+    expect(updaterCallCount2, "propA changed to false - enabled").toBe(3);
+    expect(action.active, "active 3").toBe(false);
+    expect(action.enabled, "enabled 3").toBe(false);
+  });
+  test("Action, support multiple language in title, issue#10291", () => {
+    let action = new Action({ title: "title" });
+    expect(action.title, "default title").toBe("title");
+    expect(action.locTitle.getLocaleText(""), "en title #1").toBe("title");
+    action.locTitle.setLocaleText("de", "title-de");
+    expect(action.locTitle.getLocaleText("de"), "de title #1").toBe("title-de");
+    action = new Action({ titles: { default: "title1", de: "title1-de" } });
+    expect(action.title, "default title #2").toBe("title1");
+    expect(action.locTitle.getLocaleText("de"), "de title #2").toBe("title1-de");
+    expect(action.titles, "titles").toEqual({ default: "title1", de: "title1-de" });
+    action.titles = { default: "title2", fr: "title2-fr" };
+    expect(action.title, "default title #3").toBe("title2");
+    expect(action.locTitle.getLocaleText("fr"), "fr title #3").toBe("title2-fr");
+    expect(action.titles, "titles #2").toEqual({ default: "title2", fr: "title2-fr" });
+  });
+  test("Update via function - nested dependencies", () => {
+    const base1 = new BaseTester1();
+    let updaterCallCount1 = 0;
+    const survey = new SurveyModel();
+    base1.propS = <any>new ComputedUpdater(() => {
+      updaterCallCount1++;
+      return survey.calculateWidthMode();
+    });
+
+    expect(updaterCallCount1, "first time calculation - static").toBe(1);
+    expect(base1.propS).toBe("static");
+
+    survey.widthMode = "responsive";
+    expect(updaterCallCount1, "update called - responsive").toBe(2);
+    expect(base1.propS).toBe("responsive");
+  });
+  test("Unsubscribe dependencies on dispose", () => {
+    const base1 = new BaseTester1();
+    const base2 = new BaseTester2();
+    const base3 = new BaseTester3();
+    let updaterCallCount = 0;
+    const updater = new ComputedUpdater<number>(() => {
+      updaterCallCount++;
+      return base1.propA + base2.propB;
+    });
+    base3.propC = <any>updater;
+
+    expect(Object.keys(base3.dependencies).length, "one computed").toBe(1);
+    expect(Object.keys(base3.dependencies)[0], "propC").toBe("propC");
+    expect(base3.dependencies["propC"]["dependencies"].dependencies.length, "depends on two properties").toBe(2);
+
+    expect(base1["onPropChangeFunctions"].length, "base1 one subscription").toBe(1);
+    expect(base1["onPropChangeFunctions"][0].name, "base1 one subscription to A").toBe("propA");
+    expect(base2["onPropChangeFunctions"].length, "base2 one subscription").toBe(1);
+    expect(base2["onPropChangeFunctions"][0].name, "base2 one subscription to B").toBe("propB");
+
+    expect(updaterCallCount, "first time calculation").toBe(1);
+    expect(base3.propC, "1 + 2").toBe(3);
+    base1.propA = 2;
+    expect(updaterCallCount, "propA changed").toBe(2);
+    expect(base3.propC, "2 + 2").toBe(4);
+
+    base3.dispose();
+
+    expect(Object.keys(base3.dependencies).length, "one computed").toBe(1);
+    expect(base3.dependencies["propC"]["dependencies"], "no dependencies").toBe(undefined);
+
+    expect(base1["onPropChangeFunctions"].length, "base1 no subscriptions").toBe(0);
+    expect(base2["onPropChangeFunctions"].length, "base2 no subscriptions").toBe(0);
+
+    base1.propA = 3;
+    expect(updaterCallCount, "updater doesn't react on changes").toBe(2);
+    expect(base3.propC, "no value updates").toBe(4);
+  });
+  describe("property change handlers", () => {
+    let changeCounter = 0;
+    const fire = (obj: Base, name: string): void => {
+      obj.setPropertyValue(name, ++changeCounter);
+    };
+    const handlersOf = (obj: Base, name: string): Array<{ name: string, func: any, key: string }> =>
+      obj["onPropChangeFunctions"].filter(item => item.name === name);
+
+    test("a keyed re-registration replaces the handler and keeps its position", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("A"), "a");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("B"), "b");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("C"), "c");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("B2"), "b");
+      fire(obj, "p");
+      expect(calls).toEqual(["A", "B2", "C"]);
+      expect(handlersOf(obj, "p").map(item => item.key)).toEqual(["a", "b", "c"]);
+    });
+    test("unkeyed handlers stack, and one unkeyed removal removes only the first", () => {
+      const obj = new Base();
+      let count = 0;
+      const func = () => count++;
+      obj.registerFunctionOnPropertyValueChanged("p", func);
+      obj.registerFunctionOnPropertyValueChanged("p", func);
+      fire(obj, "p");
+      expect(count, "#1: both fire").toBe(2);
+      const removed = obj.unRegisterFunctionOnPropertyValueChanged("p");
+      expect(removed.length, "#2: the removed entry is returned").toBe(1);
+      expect(removed[0].func, "#3").toBe(func);
+      fire(obj, "p");
+      expect(count, "#4: one is left").toBe(3);
+      expect(handlersOf(obj, "p").length, "#5").toBe(1);
+    });
+    test("removal by key leaves the handlers of other keys and of other names intact", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerPropertyChangedHandlers(["p", "q"], () => calls.push("k1"), "k1");
+      obj.registerPropertyChangedHandlers(["p", "q"], () => calls.push("k2"), "k2");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("unkeyed"));
+      const removed = obj.unRegisterFunctionOnPropertyValueChanged("p", "k1");
+      expect(removed.map(item => item.key), "#1").toEqual(["k1"]);
+      expect(obj.unRegisterFunctionOnPropertyValueChanged("p", "k1"), "#2: nothing left to remove").toBeUndefined();
+      fire(obj, "p");
+      expect(calls, "#3").toEqual(["k2", "unkeyed"]);
+      calls.splice(0);
+      fire(obj, "q");
+      expect(calls, "#4: the same key on another name stays").toEqual(["k1", "k2"]);
+    });
+    test("a handler that removes itself while firing does not stop the next handlers", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerFunctionOnPropertyValueChanged("p", () => {
+        calls.push("H1");
+        obj.unRegisterFunctionOnPropertyValueChanged("p", "h1");
+      }, "h1");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H2"), "h2");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H3"), "h3");
+      fire(obj, "p");
+      expect(calls, "#1").toEqual(["H1", "H2", "H3"]);
+      calls.splice(0);
+      fire(obj, "p");
+      expect(calls, "#2").toEqual(["H2", "H3"]);
+    });
+    test("a handler that removes a later handler while firing: the removed one does not fire", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerFunctionOnPropertyValueChanged("p", () => {
+        calls.push("H1");
+        obj.unRegisterFunctionOnPropertyValueChanged("p", "h2");
+      }, "h1");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H2"), "h2");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H3"), "h3");
+      fire(obj, "p");
+      expect(calls).toEqual(["H1", "H3"]);
+    });
+    test("a handler registered while firing fires in the same pass", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerFunctionOnPropertyValueChanged("p", () => {
+        calls.push("H1");
+        obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H4"), "h4");
+      }, "h1");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H2"), "h2");
+      fire(obj, "p");
+      expect(calls).toEqual(["H1", "H2", "H4"]);
+    });
+    [{ title: "keyed", h1: "h1", h4: "h4" }, { title: "unkeyed", h1: undefined, h4: undefined }].forEach(kind => {
+      test("the only handler removes itself and registers another one while firing: the new one fires in the same pass, " + kind.title, () => {
+        const obj = new Base();
+        const calls = new Array<string>();
+        obj.registerFunctionOnPropertyValueChanged("p", () => {
+          calls.push("H1");
+          obj.unRegisterFunctionOnPropertyValueChanged("p", kind.h1);
+          obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("H4"), kind.h4);
+        }, kind.h1);
+        fire(obj, "p");
+        expect(calls, "#1").toEqual(["H1", "H4"]);
+        calls.splice(0);
+        fire(obj, "p");
+        expect(calls, "#2").toEqual(["H4"]);
+      });
+    });
+    test("20,000 keyed handlers on one object register and unregister completely", () => {
+      const obj = new Base();
+      let count = 0;
+      const func = () => count++;
+      const total = 20000;
+      for (let i = 0; i < total; i++) {
+        obj.registerFunctionOnPropertyValueChanged("p", func, "k" + i);
+      }
+      expect(obj["onPropChangeFunctions"].length, "#1").toBe(total);
+      fire(obj, "p");
+      expect(count, "#2").toBe(total);
+      for (let i = 0; i < total; i++) {
+        obj.unRegisterFunctionOnPropertyValueChanged("p", "k" + i);
+      }
+      expect(obj["onPropChangeFunctions"], "#3: the snapshot is empty").toEqual([]);
+      fire(obj, "p");
+      expect(count, "#4: nothing fires").toBe(total);
+    });
+    test("firing a property does not touch the handlers of other properties", () => {
+      const obj = new Base();
+      let otherCount = 0;
+      for (let i = 0; i < 10000; i++) {
+        obj.registerFunctionOnPropertyValueChanged("other", () => otherCount++, "k" + i);
+      }
+      let targetCount = 0;
+      obj.registerFunctionOnPropertyValueChanged("target", () => targetCount++, "k0");
+      const storage: Map<string, any> = obj["propChangeHandlers"];
+      expect(storage instanceof Map, "#1: the handlers are kept by name").toBe(true);
+      storage.set("other", new Proxy({}, { get: () => { throw new Error("the handlers of 'other' were accessed"); } }));
+      fire(obj, "target");
+      expect(targetCount, "#2").toBe(1);
+      expect(otherCount, "#3").toBe(0);
+    });
+    test("empty-string keys stack like unkeyed handlers, apart from null and undefined keys", () => {
+      const obj = new Base();
+      const calls = new Array<string>();
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("E1"), "");
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("N"), null);
+      obj.registerFunctionOnPropertyValueChanged("p", () => calls.push("E2"), "");
+      fire(obj, "p");
+      expect(calls, "#1").toEqual(["E1", "N", "E2"]);
+      expect(obj.unRegisterFunctionOnPropertyValueChanged("p", null).map(item => item.key), "#2").toEqual([null]);
+      expect(obj.unRegisterFunctionOnPropertyValueChanged("p", undefined), "#3: no null or undefined key is left").toBeUndefined();
+      calls.splice(0);
+      fire(obj, "p");
+      expect(calls, "#4").toEqual(["E1", "E2"]);
+      expect(obj.unRegisterFunctionOnPropertyValueChanged("p", "").map(item => item.key), "#5").toEqual([""]);
+      calls.splice(0);
+      fire(obj, "p");
+      expect(calls, "#6").toEqual(["E2"]);
+    });
+    test("two computed updaters on a shared object: disposing one keeps the other's handler", () => {
+      const shared = new BaseTester1();
+      const owner1 = new BaseTester3();
+      const owner2 = new BaseTester3();
+      owner1.propC = <any>new ComputedUpdater<number>(() => shared.propA + 1);
+      owner2.propC = <any>new ComputedUpdater<number>(() => shared.propA * 10);
+      expect(handlersOf(shared, "propA").length, "#1").toBe(2);
+      shared.propA = 5;
+      expect(owner1.propC, "#2").toBe(6);
+      expect(owner2.propC, "#3").toBe(50);
+      owner1.dispose();
+      expect(handlersOf(shared, "propA").length, "#4").toBe(1);
+      shared.propA = 7;
+      expect(owner1.propC, "#5: the disposed owner does not update").toBe(6);
+      expect(owner2.propC, "#6").toBe(70);
+    });
+  });
+
+  test("findParentByClassNames function", () => {
+    const parentElement = document.createElement("div");
+    parentElement.classList.add("class1");
+    parentElement.classList.add("class22");
+
+    const element = document.createElement("div");
+    element.classList.add("class1");
+    element.classList.add("class2");
+
+    parentElement.appendChild(element);
+
+    expect(findParentByClassNames(element, ["class1", "class2", ""])).toBe(element);
+    expect(findParentByClassNames(element, ["class1", "class22", ""])).toBe(parentElement);
+
+    parentElement.remove();
+  });
+  test("Subscribe localizable property", () => {
+    const base4 = new BaseTester4();
+    let updaterCallCount1 = 0;
+    base4.propC = <any>new ComputedUpdater(() => {
+      updaterCallCount1++;
+      return base4.propL;
+    });
+
+    expect(base4.propC, "initial empty string").toBe("");
+    expect(updaterCallCount1, "first time calculation - static").toBe(1);
+
+    base4.propL = "localizable value";
+    expect(base4.propC).toBe("localizable value");
+    expect(updaterCallCount1, "update called - localizable value").toBe(2);
+  });
+  test("base.hasDefaultPropertyValue, base.getDefaultPropertyValue and base.resetPropertyValue()", () => {
+    const question = new QuestionDropdownModel("q1");
+    expect(question.hasDefaultPropertyValue("width"), "question.width has no default value").toBe(false);
+    expect(question.getDefaultPropertyValue("width"), "question.width default value is undefined").toBeFalsy();
+    question.width = "200px";
+    question.resetPropertyValue("width");
+    expect(question.width, "width property value is empty").toBeFalsy();
+
+    Serializer.addProperty("dropdown", { name: "propWithDefaultFunc", defaultFunc: () => "300px" });
+    expect(question.hasDefaultPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc has default value").toBe(true);
+    expect(question.getDefaultPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc default value is 300px").toBe("300px");
+    question.setPropertyValue("propWithDefaultFunc", "200px");
+    expect(question.getPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc is set to 200px").toBe("200px");
+    question.resetPropertyValue("propWithDefaultFunc");
+    expect(question.getPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc value is reset, #1").toBe("300px");
+    question.setPropertyValue("propWithDefaultFunc", "");
+    expect(question.getPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc value is empty string").toBe("");
+    question.resetPropertyValue("propWithDefaultFunc");
+    expect(question.getPropertyValue("propWithDefaultFunc"), "propWithDefaultFunc value is reset, #2").toBe("300px");
+    Serializer.removeProperty("dropdown", "propWithDefaultFunc");
+
+    expect(question.placeholder, "question.locPlaceholder default value").toBe("Select...");
+    expect(question.hasDefaultPropertyValue("placeholder"), "question.placeholder has default value").toBe(true);
+    expect(question.getDefaultPropertyValue("placeholder"), "question.placeholder default value").toBe("Select...");
+    expect(question.placeholder, "question.placeholder value").toBe("Select...");
+    question.placeholder = "abc";
+    expect(question.placeholder, "placeholder property is set to 200px").toBe("abc");
+    question.resetPropertyValue("placeholder");
+    expect(question.placeholder, "placeholder property value is reset, #1").toBe("Select...");
+    question.placeholder = "";
+    expect(question.placeholder, "placeholder property value is empty string").toBe("");
+    question.resetPropertyValue("placeholder");
+    expect(question.placeholder, "placeholder property value is reset, #2").toBe("Select...");
+  });
+  test("base.hasDefaultPropertyValue for a lazily created localizable property, minErrorText, Bug#11431", () => {
+    const question = new QuestionTextModel("q1");
+    question.inputType = "number";
+    expect(question.hasDefaultPropertyValue("minErrorText"), "minErrorText has a default value before the first access").toBe(true);
+    expect(question.getDefaultPropertyValue("minErrorText"), "minErrorText default value").toBe("The value should not be less than {0}");
+
+    const item = new ItemValue("item1");
+    expect(item.hasDefaultPropertyValue("text"), "itemvalue.text has no default value, the 'text' localization string is empty").toBe(false);
+    expect(item.locText.renderedHtml, "itemvalue.locText is rendered as the value").toBe("item1");
+    expect(item.hasDefaultPropertyValue("text"), "itemvalue.text has no default value after locText is created").toBe(false);
+  });
+  test("base.resetPropertyValue() for localization string", () => {
+    const survey = new SurveyModel();
+    expect(survey.completeText, "default value").toBe("Complete");
+    survey.completeText = "test";
+    expect(survey.completeText, "set value").toBe("test");
+    survey.resetPropertyValue("completeText");
+    expect(survey.completeText, "default value, #2").toBe("Complete");
+    const prop = Serializer.findProperty("survey", "completeText");
+    prop.setValue(survey, "", null);
+    expect(survey.completeText, "Empty string after prop.setValue func").toBe("");
+  });
+  test("base.resetPropertyValue() for localization string, #2, bug#7388", () => {
+    const survey = new SurveyModel();
+    expect(survey.completeText, "default value").toBe("Complete");
+    survey.completeText = "test en";
+    expect(survey.completeText, "set value en").toBe("test en");
+    survey.locale = "de";
+    survey.completeText = "test de";
+    expect(survey.completeText, "set value de").toBe("test de");
+    survey.resetPropertyValue("completeText");
+    expect(survey.completeText, "default value de").toBe("Abschließen"); // eslint-disable-line surveyjs/eslint-plugin-i18n/only-english-or-code
+    survey.locale = "";
+    expect(survey.completeText, "default value en").toBe("Complete");
+  });
+
+  test("check animationAllowed", () => {
+    const survey = new SurveyModel({
+      elements: [
+        {
+          name: "q1",
+          type: "text"
+        }
+      ]
+    });
+    const question = survey.getAllQuestions()[0];
+    expect(question.animationAllowed).toBeFalsy();
+    settings.animationEnabled = true;
+    question.supportOnElementRerenderedEvent = false;
+    expect(question.animationAllowed).toBeTruthy();
+    question.blockAnimations();
+    expect(question.animationAllowed).toBeFalsy();
+    question.blockAnimations();
+    expect(question.animationAllowed).toBeFalsy();
+    question.releaseAnimations();
+    expect(question.animationAllowed).toBeFalsy();
+    question.releaseAnimations();
+    expect(question.animationAllowed).toBeTruthy();
+    settings.animationEnabled = false;
+  });
+  test("runWithoutAnimations blocks animations for the run and releases them, however it exits", () => {
+    const survey = new SurveyModel({ elements: [{ name: "q1", type: "text" }] });
+    const question = survey.getAllQuestions()[0];
+    settings.animationEnabled = true;
+    try {
+      question.supportOnElementRerenderedEvent = false;
+      const states: Array<boolean> = [];
+      const res = question.runWithoutAnimations(() => {
+        states.push(question.animationAllowed);
+        question.runWithoutAnimations(() => states.push(question.animationAllowed));
+        states.push(question.animationAllowed);
+        return "done";
+      });
+      expect(res, "the run's result is returned").toBe("done");
+      expect(states, "blocked inside the run and inside a nested run").toEqual([false, false, false]);
+      expect(question.animationAllowed, "released after the run").toBe(true);
+      expect(() => question.runWithoutAnimations(() => { throw new Error("user code"); })).toThrow("user code");
+      expect(question.animationAllowed, "released after a run that throws").toBe(true);
+    } finally {
+      settings.animationEnabled = false;
+    }
+  });
+
+  test("check afterRerender function", () => {
+    const survey = new SurveyModel({});
+    expect(!!survey.onElementRerendered).toBeFalsy();
+    survey.afterRerender();
+    survey.enableOnElementRerenderedEvent();
+    let log = "";
+    survey.onElementRerendered.add((_, options) => log += `->callback: ${!!options.isCancel}`);
+    survey.afterRerender();
+    expect(log).toBe("->callback: false");
+    log = "";
+    survey.disableOnElementRerenderedEvent();
+    expect(log).toBe("->callback: true");
+    log = "";
+    survey.afterRerender();
+    expect(log).toBe("");
+  });
+  test("onSettingValue: a property should return to default when set to empty string", () => {
+    Serializer.addProperty("dropdown", {
+      name: "propWithOnSettingValue",
+      defaultFunc: () => "100%",
+      onSettingValue: (obj: any, val: any): any => { return val || undefined; }
+    });
+    const question = new QuestionDropdownModel("q1");
+    expect(question.getPropertyValue("propWithOnSettingValue"), "default value is 100%").toBe("100%");
+    question.setPropertyValue("propWithOnSettingValue", "50%");
+    expect(question.getPropertyValue("propWithOnSettingValue"), "value is set to 50%").toBe("50%");
+    question.setPropertyValue("propWithOnSettingValue", "");
+    expect(question.getPropertyValue("propWithOnSettingValue"), "value returns to default on empty string").toBe("100%");
+    Serializer.removeProperty("dropdown", "propWithOnSettingValue");
+  });
+
+  test("check default value doesn't exist on getPropertyValueDirectly", () => {
+    Serializer.addProperty("itemvalue", {
+      name: "score:number",
+      category: "general",
+      displayName: "Score",
+      default: 1,
+      visibleIndex: 5,
+    });
+    const itemValue = new ItemValue("item1");
+    expect(itemValue.getPropertyValue("score"), "default value should be returned").toBe(1);
+    itemValue.setPropertyValue("score", 1);
+    expect((itemValue as any).getPropertyValueWithoutDefault("score"), "default value shouldn't be set").toBe(undefined);
+    Serializer.removeProperty("itemvalue", "score");
+  });
+  test("check default 0 value doesn't exist on getPropertyValueDirectly", () => {
+    Serializer.addProperty("itemvalue", {
+      name: "score:number",
+      category: "general",
+      displayName: "Score",
+      default: 0,
+      visibleIndex: 5,
+    });
+    const itemValue = new ItemValue("item1");
+    expect(itemValue.getPropertyValue("score"), "default value should be returned").toBe(0);
+    itemValue.setPropertyValue("score", 0);
+    expect((itemValue as any).getPropertyValueWithoutDefault("score"), "default value shouldn't be set").toBe(undefined);
+    Serializer.removeProperty("itemvalue", "score");
+  });
+  test("getPropertyValue & calcFunc & emtpy object {}", () => {
+    let counter = 0;
+    function calcProp() {
+      counter ++;
+      return {};
+    }
+    class TestClass extends Base {
+      public get obj1(): any { return this.getPropertyValue("obj1", undefined, () => calcProp()); }
+    }
+    const obj = new TestClass();
+    expect(obj.obj1, "Test #1").toEqual({});
+    expect(obj.obj1, "Test #2").toEqual({});
+    expect(obj.obj1, "Test #3").toEqual({});
+    expect(counter, "calcProp called one time").toBe(1);
+  });
+  test("getPropertyValue & NaN", () => {
+    class TestClass extends Base {
+    @property({ defaultValue: 1 }) public pageSize: number;
+    }
+    const obj = new TestClass();
+    expect(obj.pageSize, "pageSize #1").toBe(1);
+    obj.pageSize = <any>undefined;
+    expect(obj.pageSize, "pageSize #2").toBe(1);
+    obj.pageSize = <any>null;
+    expect(obj.pageSize, "pageSize #3").toBe(1);
+    obj.pageSize = NaN;
+    expect(obj.pageSize, "pageSize #4").toBe(1);
+  });
+});

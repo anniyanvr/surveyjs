@@ -1,0 +1,24 @@
+<div *ngIf="model.isViewMode && model.getViewModeItems().length === 0" [class]="model.viewModeCssClass" [attr.id]="model.inputId">{{ model.viewDisplayText }}</div>
+<div *ngIf="model.isViewMode && model.getViewModeItems().length > 0" [class]="model.getSelectBaseRootCss()" [attr.id]="model.inputId">
+  <ng-container *ngFor="let item of model.getViewModeItems()">
+    <video *ngIf="model.contentMode === 'video'" [class]="model.cssClasses.image" [src]="item.locImageLink.renderedHtml" [attr.width]="model.renderedImageWidth" [attr.height]="model.renderedImageHeight" [style.objectFit]="model.imageFit" (loadedmetadata)="model.onContentLoaded(item, $event)"></video>
+    <img *ngIf="model.contentMode !== 'video'" [class]="model.cssClasses.image" [src]="item.locImageLink.renderedHtml" [alt]="item.locText.renderedHtml" [attr.width]="model.renderedImageWidth" [attr.height]="model.renderedImageHeight" [style.objectFit]="model.imageFit" (load)="model.onContentLoaded(item, $event)">
+  </ng-container>
+</div>
+<fieldset *ngIf="!model.isViewMode" [class]="model.getSelectBaseRootCss()" [style]="model.getContainerStyle()" #contentElement (keydown)="onKeyDown($event)">
+  <legend class="sv-hidden">{{model.locTitle.renderedHtml}}</legend>
+  <ng-container *ngIf="!model.hasColumns">
+    <ng-container *ngFor="let item of model.visibleChoices">
+      <ng-template
+        [component]="{ name: getItemValueComponentName(item), data: getItemValueComponentData(item) }"></ng-template>
+    </ng-container>
+  </ng-container>
+  <ng-container *ngIf="model.hasColumns">
+    <div *ngFor="let column of model.columns" [class]="model.getColumnClass()" role="presentation">
+      <ng-container *ngFor="let item of column">
+        <ng-template
+          [component]="{ name: getItemValueComponentName(item), data: getItemValueComponentData(item) }"></ng-template>
+      </ng-container>
+    </div>
+  </ng-container>
+</fieldset>

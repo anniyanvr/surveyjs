@@ -1,3 +1,7 @@
+---
+title: Create a Simple Survey | SurveyJS Form Libraries
+description: The guide describes a basic survey structure and its elements and offers code examples of how to display an on-page form or a pop-up survey in a web app.
+---
 # Create a Simple Survey
 
 This article illustrates a SurveyJS survey structure and the different ways you can describe this structure using a survey model. The article also contains code examples that show how to display the survey inside your page or in an expandable window. 
@@ -26,9 +30,11 @@ Use this approach if you want to add or remove survey elements at runtime.
 
 ### Define a Static Survey Model in JSON
 
-Static survey models are specified by model definitions (JSON objects). For example, the following model definition declares a [page](https://surveyjs.io/Documentation/Library?id=pagemodel) that contains two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel) and an expandable panel with two more textual questions. All survey elements have [names](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name) that can be used to identify the elements in code. The panel and questions also have [titles](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) that are displayed on screen.
+Static survey models are specified by model schemas (JSON objects). For example, the following model schema declares a [page](https://surveyjs.io/Documentation/Library?id=pagemodel) that contains two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel) and an expandable panel with two more textual questions. All survey elements have unique [names](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name) that can be used to identify the elements in code. The panel and questions also have [titles](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) that are displayed on screen.
 
 ```js
+import { Model } from "survey-core";
+
 const surveyJson = {
   pages: [{
     name: "PersonalDetails",
@@ -58,12 +64,12 @@ const surveyJson = {
   }]
 };
 
-const survey = new Survey.Model(surveyJson);
+const survey = new Model(surveyJson);
 ```
 
-The model definition above produces the following survey:
+The model schema above produces the following survey:
 
-<p class="codepen" data-height="528" data-default-tab="result" data-slug-hash="eYGgGZP" data-user="romantsukanov" style="height: 528px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 2px solid; margin: 1em 0; padding: 1em;">
+<p class="codepen" data-height="700" data-default-tab="result" data-slug-hash="eYGgGZP" data-user="romantsukanov" style="height: 528px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 2px solid; margin: 1em 0; padding: 1em;">
   <span>See the Pen <a href="https://codepen.io/romantsukanov/pen/eYGgGZP">
   SurveyJS - Define a Static Survey Model in JSON</a> by RomanTsukanov (<a href="https://codepen.io/romantsukanov">@romantsukanov</a>)
   on <a href="https://codepen.io">CodePen</a>.</span>
@@ -73,6 +79,8 @@ The model definition above produces the following survey:
 If your survey contains only one page, as in the previous example, you can skip the `pages` array declaration and specify the `elements` array at the top level:
 
 ```js
+import { Model } from "survey-core";
+
 const surveyJson = {
   elements: [{
     type: "text",
@@ -83,16 +91,18 @@ const surveyJson = {
   ]
 };
 
-const survey = new Survey.Model(surveyJson);
+const survey = new Model(surveyJson);
 ```
 
 ### Create or Change a Survey Model Dynamically
 
-SurveyJS allows you to create or modify a survey model at runtime. Call different methods to add or remove survey elements; specify properties using dot notation to configure the elements. For example, the following code adds survey elements using the [addNewPage(name)](https://surveyjs.io/Documentation/Library?id=surveymodel#addNewPage), [addNewPanel(name)](https://surveyjs.io/Documentation/Library?id=pagemodel#addNewPanel), and [addNewQuestion(type, name)](https://surveyjs.io/Documentation/Library?id=pagemodel#addNewQuestion) methods. The [title](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and [state](https://surveyjs.io/Documentation/Library?id=panelmodel#state) properties configure the added elements. Refer to the [API](https://surveyjs.io/Documentation/Library?id=surveymodel) help section for a full list of supported methods and properties.
+SurveyJS allows you to create or modify a survey model at runtime. Call different methods to add or remove survey elements and specify properties using dot notation to configure the elements. For example, the following code adds survey elements using the [`addNewPage(name)`](https://surveyjs.io/Documentation/Library?id=surveymodel#addNewPage), [`addNewPanel(name)`](https://surveyjs.io/Documentation/Library?id=pagemodel#addNewPanel), and [`addNewQuestion(type, name)`](https://surveyjs.io/Documentation/Library?id=pagemodel#addNewQuestion) methods. The [`title`](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and [`state`](https://surveyjs.io/Documentation/Library?id=panelmodel#state) properties configure the added elements. Refer to the [API Reference](https://surveyjs.io/Documentation/Library?id=surveymodel) help section for a full list of supported methods and properties.
 
 ```js
+import { Model } from "survey-core";
+
 // Create an empty model
-const survey = new Survey.Model();
+const survey = new Model();
 // Add a PersonalDetails page to the model
 const page = survey.addNewPage("PersonalDetails");
 // Add a FirstName question to the page
@@ -117,9 +127,23 @@ const github = panel.addNewQuestion("text", "GitHub");
 github.title = "GitHub username:"
 ```
 
+If you want to add a [Dynamic Panel](https://surveyjs.io/form-library/examples/duplicate-group-of-fields-in-form/) to your survey at runtime, push the nested elements to the panel's [`templateElements`](https://surveyjs.io/form-library/documentation/api-reference/dynamic-panel-model#templateElements) array:
+
+```js
+const page1 = survey.addNewPage("page1");
+const q1 = page.addNewQuestion("text", "question1");
+q1.title = "My Question";
+
+const dynamicPanel = page.addNewQuestion("paneldynamic", "myDynamicPanel");
+dynamicPanel.title = "My Dynamic Panel";
+dynamicPanel.templateElements.push(q1);
+```
+
 You can combine both approaches to survey model configuration. The following example shows how to define a survey model in JSON, and then change it using methods and properties:
 
 ```js
+import { Model } from "survey-core";
+
 const surveyJson = {
   pages: [{
     name: "PersonalDetails",
@@ -143,7 +167,7 @@ const surveyJson = {
   }]
 };
 
-const survey = new Survey.Model(surveyJson);
+const survey = new Model(surveyJson);
 
 // Add a title to the GitHub question
 const github = survey.getQuestionByName("GitHub");
@@ -164,18 +188,22 @@ if (panel) {
 
 ## Display the Survey
 
-You can embed the survey inside your page or display it as an expandable window:
+You can embed the survey inside your page or display it as a pop-up survey:
 
 <details>
     <summary>Angular</summary> 
 
 ```html
-<div id="surveyContainer"></div>
+<!-- Render the survey inside the page -->
+<survey [model]="surveyModel"></survey>
+
+<!-- Render the survey in a pop-up window -->
+<popup-survey [model]="surveyModel" [isExpanded]="true"></popup-survey>
 ```
 
 ```js
 import { Component, OnInit } from '@angular/core';
-import { Model, SurveyNG, SurveyWindowNG } from "survey-angular";
+import { Model } from "survey-core";
 
 const surveyJson = {
   // ...
@@ -187,14 +215,10 @@ const surveyJson = {
   styleUrls: ['./app.component.css']
 })
 export class AppComponent implements OnInit {
+  surveyModel: Model;
   ngOnInit() {
     const survey = new Model(surveyJson);
-
-    // Render the survey inside the page
-    SurveyNG.render("surveyContainer", { model: survey });
-
-    // Render the survey as an expandable window
-    SurveyWindowNG.render("surveyContainer", { model: survey });
+    this.surveyModel = survey;
   }
 }
 ```
@@ -202,39 +226,26 @@ export class AppComponent implements OnInit {
 </details>
 
 <details>
-    <summary>Vue</summary> 
+    <summary>Vue.js</summary> 
 
-```js
-<template>
-  <!-- Render the survey inside the page -->
-  <Survey :survey="survey" />
-
-  <!-- Render the survey as an expandable window -->
-  <SurveyWindow :survey="survey" />
-</template>
-
-<script>
+```html
+<script setup lang="ts">
 import { Model } from 'survey-core';
-import { Survey, SurveyWindow } from 'survey-vue-ui';
+import { SurveyComponent, PopupSurveyComponent } from "survey-vue3-ui";
 
 const surveyJson = {
   // ...
 };
-
-export default {
-  components: {
-    Survey,
-    SurveyWindow
-  },
-  data() {
-    const survey = new Model(surveyJson);
-
-    return {
-      survey
-    }
-  }
-}
+const survey = new Model(surveyJson);
 </script>
+
+<template>
+  <!-- Render the survey inside the page -->
+  <SurveyComponent :model="survey" />
+
+  <!-- Render the survey in a pop-up window -->
+  <PopupSurveyComponent :model="survey" :isExpanded="true" />
+</template>
 ```
 </details>
 
@@ -242,52 +253,39 @@ export default {
     <summary>React</summary> 
 
 ```js
+// components/Survey.tsx
+'use client'
+
+import { useMemo } from 'react';
 import { Model } from 'survey-core';
-import { Survey, SurveyWindow } from 'survey-react-ui';
+import { Survey, PopupSurvey } from 'survey-react-ui';
 
 const surveyJson = {
   // ...
 };
 
-function App() {
-  const survey = new Model(surveyJson);
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), []);
 
   // Render the survey inside the page
   return <Survey model={survey} />;
 
-  // Render the survey as an expandable window
-  return <SurveyWindow model={surveyJson} />;
+  // Render the survey in a pop-up window
+  return <PopupSurvey model={survey} isExpanded={true} />;
 }
-
-export default App;
-```
-</details>
-
-
-<details>
-    <summary>Knockout</summary> 
-
-```html
-<div id="surveyContainer"></div>
 ```
 
 ```js
-const surveyJson = {
-    // ...
-};
+// survey/page.tsx
+import SurveyComponent from '@/components/Survey';
 
-// Render the survey inside the page
-const survey = new Survey.Model(surveyJson);
-document.addEventListener("DOMContentLoaded", function() {
-    survey.render("surveyContainer");
-});
-
-// Render the survey as an expandable window
-const survey = new Survey.SurveyWindow(surveyJson);
-survey.show();
+export default function Survey() {
+  return (
+    <SurveyComponent />
+  );
+}
 ```
 </details>
-
 
 <details>
     <summary>jQuery</summary> 
@@ -307,16 +305,46 @@ $(function() {
     // Render the survey inside the page
     $("#surveyContainer").Survey({ model: survey });
 
-    // Render the survey as an expandable window
-    $("#surveyContainer").SurveyWindow({ model: survey });
+    // Render the survey in a pop-up window
+    $("#surveyContainer").PopupSurvey({ model: survey, isExpanded: true });
 });
+```
+
+</details>
+
+<details>
+    <summary>HTML/JS/CSS</summary> 
+
+```html
+<div id="surveyContainer"></div>
+```
+
+```js
+const surveyJson = {
+  // ...
+};
+
+const survey = new Survey.Model(surveyJson);
+
+// Render the survey inside the page
+document.addEventListener("DOMContentLoaded", function() {
+  survey.render(document.getElementById("surveyContainer"));
+});
+
+// Render the survey in a pop-up window
+SurveyUI.renderPopupSurvey(
+  survey,
+  document.getElementById("surveyContainer"),
+  { isExpanded: true }
+);
 ```
 </details>
 
-## Further Reading
+[View Demo](https://surveyjs.io/Examples/Library?id=survey-window (linkStyle))
+
+## See Also
 
 - [Create a Multi-Page Survey](https://surveyjs.io/Documentation/Library?id=design-survey-create-a-multi-page-survey)
 - [Create a Quiz](https://surveyjs.io/Documentation/Library?id=design-survey-create-a-quiz)
-- [Dynamic Text](https://surveyjs.io/Documentation/Library?id=design-survey-dynamic-text)
-- [Conditional Display](https://surveyjs.io/Documentation/Library?id=design-survey-conditional-display)
-- [Survey States](https://surveyjs.io/Documentation/Library?id=handle-results-survey-states)
+- [Conditional Logic and Dynamic Texts](https://surveyjs.io/Documentation/Library?id=design-survey-conditional-logic)
+- [Access Survey Results](https://surveyjs.io/Documentation/Library?id=handle-survey-results-access)

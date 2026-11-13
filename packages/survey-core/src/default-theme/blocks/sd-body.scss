@@ -1,0 +1,159 @@
+@use "../variables.scss" as *;
+@use "../mixins.scss" as mixins;
+
+.sd-body {
+  --sjs-default-font-size: calc(var(--sjs2-base-unit-font-size) * 2);
+
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--sjs2-layout-component-survey-box-gap-vertical);
+  padding-bottom: var(--sjs2-layout-component-survey-box-padding-bottom);
+  row-gap: var(--sjs2-layout-component-survey-box-gap-vertical);
+  & > .sv-components-column {
+    row-gap: var(--sjs2-layout-component-survey-box-gap-vertical);
+  }
+
+  .sd-body__page {
+    min-width: min(100%, 300px);
+  }
+
+  .sd-body__timer {
+    padding: var(--sjs2-spacing-x200) var(--sjs2-spacing-x200) 0;
+    box-sizing: border-box;
+  }
+
+  &.sd-body--static {
+    max-width: calc(var(--sjs2-base-unit-size) * 90);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  &.sd-body--responsive {
+    max-width: initial;
+    box-sizing: border-box;
+
+    .sd-body__timer {
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    &.sd-body--with-timer {
+      max-width: calc(100% + var(--sd-timer-size) * (-1 - 64 / 144) + var(--sjs2-size-x600));
+      margin-left: auto;
+      margin-right: auto;
+    }
+  }
+}
+
+.sd-root-modern--mobile {
+  .sd-body {
+    &.sd-body--with-timer.sd-body--responsive {
+      max-width: initial;
+      margin-left: 0;
+      margin-right: 0;
+    }
+  }
+}
+
+.sd-body--empty {
+  min-height: 400px;
+  text-align: center;
+  padding-top: 180px;
+  box-sizing: border-box;
+}
+
+.sd-body--empty,
+.sd-body--loading {
+  @include mixins.articleHtml;
+}
+
+.sd-root_background-image {
+  background-position-x: center;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+// questionPerPage / inputPerPage. Vertical centering only appears when the host
+// already gives the root a height (fitToContainer or an explicit height). flex-grow
+// adds no space when that height is missing, so the layout stays top-aligned.
+// No min-height and no viewport units: a survey embedded in a short page must not grow.
+// Descendant selectors also match a survey nested inside this one. A direct-child
+// chain would need a variant for every optional sv-scroll wrapper, so the shorter
+// form is intentional.
+.sd-root-modern--single-question {
+  display: flex;
+  flex-direction: column;
+
+  > .sv-scroll__wrapper,
+  > .sd-root-modern__wrapper,
+  .sv-scroll__container > .sd-root-modern__wrapper {
+    flex-grow: 1;
+  }
+
+  .sd-root-modern__wrapper {
+    display: flex;
+    flex-direction: column;
+
+    > form {
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+    }
+  }
+
+  // collab-changes.scss turns this container into a two-column grid.
+  .sd-container-modern:not(:has(> .sv-collab-changes)) {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+  }
+
+  // The row stays horizontal: TOC columns sit on its sides.
+  .sd-container-modern > .sv-components-row,
+  .sv-components-column--expandable > .sd-body {
+    flex-grow: 1;
+  }
+}
+
+.sd-body.sd-body--single-question {
+  > .sd-body__page,
+  > .sv-components-container-contentBottom {
+    flex-grow: 1;
+    flex-shrink: 0;
+  }
+
+  // Header stays at the top of the page. The page and the bottom buttons split the
+  // free space, and the question is pushed to the bottom of the page, so the question
+  // and the buttons meet in the middle.
+  &:has(.sv-components-container-contentBottom) > .sd-body__page > .sd-page__content {
+    margin-top: auto;
+  }
+
+  // No navigation bar: center the question inside the page. Brand info, when
+  // present, stays after the page.
+  &:not(:has(.sv-components-container-contentBottom)) > .sd-body__page > .sd-page__content {
+    margin-block: auto;
+  }
+
+  // Navigation on top lives in contentTop, before the page. Keep that bar against
+  // the question and center the pair. A page header stays the first block of the page.
+  &:has(> .sv-components-container-contentTop):not(:has(> .sv-components-container-contentBottom)) {
+    > .sv-components-container-contentTop {
+      margin-top: auto;
+    }
+
+    > .sd-body__page {
+      flex-grow: 0;
+      margin-bottom: auto;
+    }
+
+    > .sd-body__page > .sd-page__content {
+      margin-block: 0;
+    }
+  }
+}

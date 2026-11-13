@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/showdown/1.6.4/showdown.min.js"></script>
+  <script src="../../node_modules/survey-core/themes/default-light-panelless.js"></script>
+
+  <!-- An exact version, so the tests do not change with every React release. The development
+       build stays: React reports its warnings only there, and the tests turn them into failures. -->
+  <script defer type="module">
+    import React from "https://esm.sh/react@19.3.1?dev";
+    import ReactDOMClient from "https://esm.sh/react-dom@19.3.1/client?dev";
+    import ReactDOM from "https://esm.sh/react-dom@19.3.1?dev";
+    window.ReactDOMClient = ReactDOMClient;
+    window.React = React;
+    window.ReactDOM = ReactDOM;
+  </script>
+  <script src="../../node_modules/survey-core/survey.core.min.js" defer></script>
+  <script src="../../build/survey-react-ui.min.js" defer></script>
+  <link rel="stylesheet" href="../../node_modules/survey-core/survey-core.min.css" />
+  <!-- survey-core embeds no @font-face rule; the page supplies Open Sans itself.
+       Pinned to the files the reference screenshots were taken with - see fonts.css. -->
+  <link rel="stylesheet" href="../../fonts.css" />
+</head>
+
+<body spellcheck="false">
+  <div id="surveyElement"></div>
+  <div id="surveyResultElement"></div>
+</body>
+
+</html>

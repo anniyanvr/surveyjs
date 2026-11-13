@@ -1,0 +1,354 @@
+import { setupLocale } from "survey-core";
+
+export var finnishSurveyStrings = {
+  // "Previous"
+  pagePrevText: "Edellinen",
+  // "Next"
+  pageNextText: "Seuraava",
+  // [Auto-translated] "First"
+  pageFirstText: "Ensimmäinen",
+  // [Auto-translated] "Last"
+  pageLastText: "Viimeinen",
+  // [Auto-translated] "of {0}"
+  pagerTotalText: "{0}",
+  // [Auto-translated] "Select Page"
+  pagerSelectPageTitle: "Valitse sivu",
+  // [Auto-translated] "Sort by {0}"
+  sortByColumnText: "Lajittele {0}",
+  // [Auto-translated] "High - Low"
+  sortHighLowText: "Korkea - Matala",
+  // [Auto-translated] "Low - High"
+  sortLowHighText: "Matala - Korkea",
+  // [Auto-translated] "Alphabet, A - Z"
+  sortAZText: "Aakkoset, A - Z",
+  // [Auto-translated] "Alphabet, Z - A"
+  sortZAText: "Aakkoset, Z - A",
+  // [Auto-translated] "Newest first"
+  sortNewestFirstText: "Uusin ensimmäisenä",
+  // [Auto-translated] "Oldest first"
+  sortOldestFirstText: "Vanhin ensin",
+  // [Auto-translated] "Sorted by {0}"
+  sortOrderText: "Lajiteltu {0}",
+  // [Auto-translated] "{0} ({1})"
+  sortOrderLevelText: "{0} ({1})",
+  // [Auto-translated] "{0}, then by {1}"
+  sortOrderNextText: "{0}, sitten {1}",
+  // [Auto-translated] "Sort by"
+  sortByText: "Lajittele mukaan",
+  // [Auto-translated] "Default"
+  sortDefaultText: "Oletus",
+  // [Auto-translated] "Sort field"
+  sortFieldAriaLabel: "Lajittelukenttä",
+  // [Auto-translated] "Sort order"
+  sortDirectionAriaLabel: "Lajittelujärjestys",
+  // [Auto-translated] "Add sort level"
+  sortAddLevelText: "Lisää lajittelutaso",
+  // [Auto-translated] "Remove sort level {0}"
+  sortRemoveLevelText: "Poista lajittelutaso {0}",
+  // [Auto-translated] "Sort field {0}"
+  sortLevelFieldAriaLabel: "Lajittele kenttä {0}",
+  // [Auto-translated] "Sort order {0}"
+  sortLevelDirectionAriaLabel: "Lajittelujärjestys {0}",
+  // [Auto-translated] "Show all sort levels"
+  sortMoreAriaLabel: "Näytä kaikki lajittelutasot",
+  // [Auto-translated] "Add New"
+  sortAddNewText: "Lisää uusi",
+  // [Auto-translated] "Move sort level {0}"
+  sortMoveLevelAriaLabel: "Liikkeiden lajittelutaso {0}",
+  // "Complete"
+  completeText: "Valmis",
+  // "Preview"
+  previewText: "Esikatselu",
+  // "Edit"
+  editText: "Muokkaa",
+  // "Start"
+  startSurveyText: "Aloita",
+  // [Auto-translated] "Please leave a comment"
+  commentText: "Jätä kommentti",
+  // "Other (describe)"
+  otherItemText: "Muu (tarkenna)",
+  // "None"
+  noneItemText: "Ei mitään",
+  // [Auto-translated] "Refuse to answer"
+  refuseItemText: "Kieltäydy vastaamasta",
+  // [Auto-translated] "Don't know"
+  dontKnowItemText: "Ei tiedä",
+  // "Select All"
+  selectAllItemText: "Valitse kaikki",
+  // [Auto-translated] "Deselect all"
+  deselectAllItemText: "Poista kaikki valinnat",
+  // "Page {0} of {1}"
+  progressText: "Sivu {0} / {1}",
+  // "{0} of {1}"
+  indexText: "{0} / {1}",
+  // "{0} of {1}"
+  panelDynamicProgressText: "Osio {0} / {1}",
+  // [Auto-translated] "Panel {panelIndex}"
+  panelDynamicTabTextFormat: "Paneeli {panelIndex}",
+  // "Answered {0}/{1} questions"
+  questionsProgressText: "Olet vastannut {0} / {1} kysymykseen.",
+  // [Auto-translated] "Question {0} of {1}"
+  questionPositionProgressText: "Kysymys {0} {1}",
+  // "The survey doesn't contain any visible elements."
+  emptySurvey: "Tässä kyselyssä ei ole yhtään näkyvillä olevaa sivua tai kysymystä.",
+  // "Thank you for completing the survey"
+  completingSurvey: "Kiitos kyselyyn vastaamisesta!",
+  // "You have already completed this survey."
+  completingSurveyBefore: "Tietojemme mukaan olet jo suorittanut tämän kyselyn.",
+  // "Loading Survey..."
+  loadingSurvey: "Kyselyä ladataan palvelimelta...",
+  // "Select..."
+  placeholder: "Valitse...",
+  // "Select..."
+  ratingOptionsCaption: "Arvioi napauttamalla tätä...",
+  // [Auto-translated] "Select..."
+  buttongroupOptionsCaption: "Valitse...",
+  // "value"
+  value: "arvo",
+  // "Response required."
+  requiredError: "Vastaa kysymykseen, kiitos.",
+  // [Auto-translated] "You must select Yes to continue."
+  requireTrueError: "Sinun täytyy valita Kyllä jatkaaksesi.",
+  // [Auto-translated] "The value is incorrect."
+  incorrectValueError: "Arvo on väärä.",
+  // [Auto-translated] "The value contains unknown keys: {0}."
+  incorrectValueUnknownKeysError: "Arvo sisältää tuntemattomia avaimia: {0}.",
+  // "Response required: answer at least one question."
+  requiredErrorInPanel: "Vastaa ainakin yhteen kysymykseen.",
+  // "Response required: answer questions in all rows."
+  requiredInAllRowsError: "Vastaa kysymyksiin kaikilla riveillä.",
+  // [Auto-translated] "Each row must have a unique value."
+  eachRowUniqueError: "Jokaisella rivillä on oltava yksilöllinen arvo.",
+  // "The value should be numeric."
+  numericError: "Arvon tulee olla numeerinen.",
+  // "The value should not be less than {0}"
+  minError: "Arvo ei saa olla pienempi kuin {0}",
+  // [Auto-translated] "Please enter a value that matches the step size of {0}."
+  stepError: "Syötä arvo, joka vastaa {0} askelkokoa.",
+  // "The value should not be greater than {0}"
+  maxError: "Arvo ei saa olla suurempi kuin {0}",
+  // [Auto-translated] "Invalid input"
+  invalidInputError: "Virheellinen syöte",
+  // [Auto-translated] "Numbers are not allowed."
+  textNoDigitsAllow: "Numerot eivät ole sallittuja.",
+  // [Auto-translated] "Please complete the value to match the required format."
+  incompletePatternError: "Täytäthän arvon vastaamaan vaadittua muotoa.",
+  // "Please enter at least {0} character(s)."
+  textMinLength: "Syötä vähintään {0} merkkiä.",
+  // "Please enter no more than {0} character(s)."
+  textMaxLength: "Älä syötä yli {0} merkkiä.",
+  // "Please enter at least {0} and no more than {1} characters."
+  textMinMaxLength: "Syötä vähintään {0} ja enintään {1} merkkiä.",
+  // "Please fill in at least {0} row(s)."
+  minRowCountError: "Täytä vähintään {0} riviä.",
+  // "Please select at least {0} option(s)."
+  minSelectError: "Valitse vähintään {0} vaihtoehtoa.",
+  // "Please select no more than {0} option(s)."
+  maxSelectError: "Valitse enintään {0} vaihtoehtoa.",
+  // "The '{0}' should be at least {1} and at most {2}"
+  numericMinMax: "Luvun '{0}' tulee olla vähintään {1} ja korkeintaan {2}.",
+  // "The '{0}' should be at least {1}"
+  numericMin: "Luvun '{0}' tulee olla vähintään {1}.",
+  // "The '{0}' should be at most {1}"
+  numericMax: "Luvun '{0}' tulee olla korkeintaan {1}.",
+  // "Please enter a valid e-mail address."
+  invalidEmail: "Syötä validi sähköpostiosoite.",
+  // "The expression: {0} should return 'true'."
+  invalidExpression: "Lausekkeen: {0} pitäisi palauttaa 'true'.",
+  // "The request returned error '{0}'. {1}"
+  urlRequestError: "Pyyntö palautti virheen {0}. {1}",
+  // "The request returned empty data or the 'path' property is incorrect"
+  urlGetChoicesError: "Pyyntö palautti tyhjän tiedoston tai 'path'-asetus on väärä",
+  // "The file size should not exceed {0}."
+  exceedMaxSize: "Tiedoston koko ei saa olla suurempi kuin {0}.",
+  // [Auto-translated] "Bytes, KB, MB, GB, TB"
+  fileSizeUnits: "Tavut, KB, MB, GB, TB",
+  // [Auto-translated] "The maximum number of files you can upload is {0}."
+  exceedMaxFiles: "Tiedostojen enimmäismäärä, jonka voit ladata, on {0}.",
+  // [Auto-translated] "Files cannot be uploaded. Please add a handler for the 'onUploadFiles' event."
+  noUploadFilesHandler: "Tiedostoja ei voi ladata. Lisää käsittelijä onUploadFiles-tapahtumalle.",
+  // "Response required: enter another value."
+  otherRequiredError: "Tarkenna vastaustasi tekstikenttään.",
+  // [Auto-translated] "The value '{0}' is not one of the available choices."
+  variableValueNotInChoices: "Arvo '{0}' ei ole yksi käytettävissä olevista vaihtoehdoista.",
+  // "Your file is uploading. Please wait several seconds and try again."
+  uploadingFile: "Tiedostoa lähetetään. Odota muutama sekunti ja yritä uudelleen.",
+  // "Loading..."
+  loadingFile: "Ladataan...",
+  // "Choose file(s)..."
+  chooseFile: "Valitse tiedosto(t)...",
+  // "No file selected"
+  noFileChosen: "Ei tiedostoa valittuna",
+  // "Drag and drop a file here or click the button below to select a file to upload."
+  filePlaceholder: "Pudota tiedosto tähän tai lataa tiedosto napsauttamalla alla olevaa painiketta.",
+  // "Are you sure you want to delete this record?"
+  confirmDelete: "Haluatko poistaa osion?",
+  // "This value should be unique."
+  keyDuplicationError: "Tämä arvo on jo käytössä. Syötä toinen arvo.",
+  // "Add Column"
+  addColumn: "Lisää sarake",
+  // "Add Row"
+  addRow: "Lisää rivi",
+  // "Remove"
+  removeRow: "Poista",
+  // [Auto-translated] "Move row {0}"
+  moveRowAriaLabel: "Siirrä rivi {0}",
+  // "There are no rows."
+  noRowsText: "Ei rivejä",
+  // [Auto-translated] "Row {rowIndex}"
+  rowIndexTemplateTitle: "Rivi {rowIndex}",
+  // [Auto-translated] "{rowTitle}"
+  rowNameTemplateTitle: "{rowTitle}",
+  // "Add new"
+  addPanel: "Lisää uusi",
+  // "Remove"
+  removePanel: "Poista",
+  // [Auto-translated] "Show Details"
+  showDetails: "Näytä tiedot",
+  // [Auto-translated] "Hide Details"
+  hideDetails: "Piilota tiedot",
+  // "item"
+  choices_Item: "kohde",
+  // [Auto-translated] "Choice option"
+  choices_Choice: "Valintavaihtoehto",
+  // "Column"
+  matrix_column: "Sarake",
+  // "Row"
+  matrix_row: "Rivi",
+  // "text"
+  multipletext_itemname: "teksti",
+  // "The results are being saved on the server..."
+  savingData: "Tietoja tallennetaan palvelimelle...",
+  // "An error occurred and we could not save the results."
+  savingDataError: "Tapahtui virhe, emmekä voineet tallentaa kyselyn tietoja.",
+  // "The results were saved successfully!"
+  savingDataSuccess: "Tiedot tallennettiin onnistuneesti!",
+  // "Try again"
+  saveAgainButton: "Yritä uudelleen",
+  // [Auto-translated] "min"
+  timerMin: "min",
+  // "sec"
+  timerSec: "sek",
+  // "You have spent {0} on this page and {1} in total."
+  timerSpentAll: "Olet käyttänyt {0} tällä sivulla ja yhteensä {1}.",
+  // "You have spent {0} on this page."
+  timerSpentPage: "Olet käyttänyt {0} tällä sivulla.",
+  // "You have spent {0} in total."
+  timerSpentSurvey: "Olet käyttänyt yhteensä {0}.",
+  // "You have spent {0} of {1} on this page and {2} of {3} in total."
+  timerLimitAll: "Olet käyttänyt tällä sivulla {0} / {1} ja yhteensä {2} / {3}.",
+  // "You have spent {0} of {1} on this page."
+  timerLimitPage: "Olet käyttänyt {0} / {1} tällä sivulla.",
+  // "You have spent {0} of {1} in total."
+  timerLimitSurvey: "Olet käyttänyt yhteensä {0} / {1}.",
+  // "Clear"
+  clearCaption: "Tyhjennä",
+  // [Auto-translated] "Select"
+  selectCaption: "Valikoida",
+  // "Sign here"
+  signaturePlaceHolder: "Allekirjoita tähän",
+  // [Auto-translated] "No signature"
+  signaturePlaceHolderReadOnly: "Ei allekirjoitusta",
+  // "Select File"
+  chooseFileCaption: "Valitse tiedosto",
+  // [Auto-translated] "Take Photo"
+  takePhotoCaption: "Ota valokuva",
+  // [Auto-translated] "Click the button below to take a photo using the camera."
+  photoPlaceholder: "Napsauta alla olevaa painiketta ottaaksesi valokuvan kameralla.",
+  // [Auto-translated] "Drag and drop or select a file to upload or take a photo using the camera."
+  fileOrPhotoPlaceholder: "Vedä ja pudota tai valitse ladattava tiedosto tai ota valokuva kameralla.",
+  // [Auto-translated] "Replace file"
+  replaceFileCaption: "Korvaa tiedosto",
+  // "Remove this file"
+  removeFileCaption: "Poista tämä tiedosto",
+  // "Yes"
+  booleanCheckedLabel: "Kyllä",
+  // "No"
+  booleanUncheckedLabel: "Ei",
+  // "Are you sure that you want to remove this file: {0}?"
+  confirmRemoveFile: "Haluatko varmasti poistaa tämän tiedoston: {0}?",
+  // "Are you sure that you want to remove all files?"
+  confirmRemoveAllFiles: "Haluatko varmasti poistaa kaikki tiedostot?",
+  // "Question Title"
+  questionTitlePatternText: "Kysymyksen otsikko",
+  // "Cancel"
+  modalCancelButtonText: "Peruuta",
+  // "Apply"
+  modalApplyButtonText: "Käytä",
+  // "Type to search..."
+  filterStringPlaceholder: "Hae kirjoittamalla...",
+  // [Auto-translated] "No data to display"
+  emptyMessage: "Ei näytettäviä tietoja",
+  // [Auto-translated] "Loading..."
+  loadingPage: "Latautuu...",
+  // [Auto-translated] "Loading..."
+  loadingData: "Latautuu...",
+  // "No entries yet.\nClick the button below to add a new entry."
+  noEntriesText: "Merkintöjä ei ole vielä.\nLisää uusi merkintä napsauttamalla alla olevaa painiketta.",
+  // [Auto-translated] "No entries"
+  noEntriesReadonlyText: "Ei merkintöjä",
+  // [Auto-translated] "New Panel"
+  tabTitlePlaceholder: "Uusi paneeli",
+  // [Auto-translated] "More"
+  more: "Enemmän",
+  // [Auto-translated] "OK"
+  tagboxDoneButtonCaption: "Ok",
+  // [Auto-translated] "All choices are selected for ranking"
+  selectToRankEmptyRankedAreaText: "Kaikki valinnat valitaan paremmuusjärjestykseen",
+  // [Auto-translated] "Drag choices here to rank them"
+  selectToRankEmptyUnrankedAreaText: "Vedä valinnat tähän asettaaksesi ne paremmuusjärjestykseen",
+  // [Auto-translated] "OK"
+  ok: "Ok",
+  // [Auto-translated] "Cancel"
+  cancel: "Peru",
+  // "Create \"{0}\" item..."
+  createCustomItem: "Luo \"{0}\"-kohde...",
+  // [Auto-translated] "Table of contents"
+  toc: "Sisällysluettelo",
+  // [Auto-translated] "Progress bar"
+  progressbar: "Edistymispalkki",
+  // [Auto-translated] "Page {0}"
+  progressbarPage: "Sivu {0}",
+  // "d" - a day placeholder symbol in a datetime input mask
+  maskPlaceholderDay: "p",
+  // "m" - a month placeholder symbol in a datetime input mask
+  maskPlaceholderMonth: "k",
+  // "y" - a year placeholder symbol in a datetime input mask
+  maskPlaceholderYear: "v",
+  // "h" - a 12-hour placeholder symbol in a datetime input mask
+  maskPlaceholderHour12: "t",
+  // "H" - a 24-hour placeholder symbol in a datetime input mask
+  maskPlaceholderHour24: "T",
+  // "M" - a minute placeholder symbol in a datetime input mask
+  maskPlaceholderMinute: "m",
+  // "s" - a second placeholder symbol in a datetime input mask
+  maskPlaceholderSecond: "s",
+  // "t" - a lowercase AM/PM marker placeholder symbol in a datetime input mask
+  maskPlaceholderTimeMarkerLower: "i",
+  // "T" - an uppercase AM/PM marker placeholder symbol in a datetime input mask
+  maskPlaceholderTimeMarkerUpper: "I",
+  // [Auto-translated] "to select"
+  keyboardHintSelectText: "valita",
+  // [Auto-translated] "to toggle"
+  keyboardHintToggleText: "vaihtaa",
+  // [Auto-translated] "to navigate"
+  keyboardHintNavigateText: "navigoida",
+  // [Auto-translated] "to continue"
+  keyboardHintContinueText: "jatkaa",
+  // [Auto-translated] "to submit"
+  keyboardHintSubmitText: "alistua",
+  // [Auto-translated] "or"
+  keyboardHintOrText: "tai",
+  // [Auto-translated] "for a new line"
+  keyboardHintNewLineText: "Uudelle linjalle",
+  // [Auto-translated] "to next option"
+  keyboardHintNextItemText: "Seuraavaan vaihtoehtoon",
+  // [Auto-translated] "to move"
+  keyboardHintMoveText: "liikkua",
+  // [Auto-translated] "to open"
+  keyboardHintOpenText: "avaamaan",
+  // [Auto-translated] "to close"
+  keyboardHintCloseText: "sulkea"
+};
+
+setupLocale({ localeCode: "fi", strings: finnishSurveyStrings, nativeName: "suomi", englishName: "Finnish" });

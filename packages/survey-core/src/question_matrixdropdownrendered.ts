@@ -1,0 +1,1357 @@
+import { property, propertyArray } from "./decorators";
+import { Question } from "./question";
+import { Base, ComputedUpdater } from "./base";
+import { ISurvey } from "./base-interfaces";
+import { ItemValue } from "./itemvalue";
+import { LocalizableString } from "./localizablestring";
+import { PanelModel } from "./panel";
+import { Action, BaseAction, IAction } from "./actions/action";
+import { AdaptiveActionContainer } from "./actions/adaptive-container";
+import { toCssClasses } from "./utils/cssClassBuilder";
+import { MatrixDropdownColumn } from "./question_matrixdropdowncolumn";
+import { MatrixDropdownCell, MatrixDropdownRowModelBase, QuestionMatrixDropdownModelBase } from "./question_matrixdropdownbase";
+import { ActionContainer } from "./actions/container";
+import type { QuestionMatrixDynamicModel } from "./question_matrixdynamic";
+import { AnimationGroup, IAnimationGroupConsumer } from "./utils/animation";
+import { cleanHtmlElementAfterAnimation, prepareElementForVerticalAnimation } from "./utils/animation-dom";
+import { ISortCriterion, SortDirection } from "./dynamic-data/dynamic-data-interfaces";
+import { getSortDirectionLocStringName } from "./records/records-sort-directions";
+
+function getId(id: string, isError: boolean, isDetail: boolean) {
+  return id + (isError ? "-error" : "") + (isDetail ? "-detail" : "");
+}
+// The matrix whose rows are added, removed and dragged, read by its flag: question_matrixdynamic imports this file.
+function getDynamicMatrix(matrix: QuestionMatrixDropdownModelBase): QuestionMatrixDynamicModel {
+  return matrix.isRowsDynamic ? <QuestionMatrixDynamicModel>matrix : undefined;
+}
+// The same actions in the same cells: the ids and the locations, in order (an action without a location is a "start" one).
+function isSameActionIds(actions: Array<IAction>, oldActions: Array<IAction>): boolean {
+  if (!Array.isArray(actions) || !Array.isArray(oldActions) || actions.length !== oldActions.length) return false;
+  return actions.every((action: IAction, index: number): boolean => action.id === oldActions[index].id &&
+    (action.location || "start") === (oldActions[index].location || "start"));
+}
+
+export class QuestionMatrixDropdownRenderedCell {
+  private idValue: string;
+  private itemValue: ItemValue;
+  public minWidth: string = "";
+  public width: string = "";
+  public locTitle: LocalizableString;
+  public cell: MatrixDropdownCell;
+  public column: MatrixDropdownColumn;
+  public row: MatrixDropdownRowModelBase;
+  public question: Question;
+  public choiceIndex: number;
+  public isOtherChoice: boolean;
+  public matrix: QuestionMatrixDropdownModelBase;
+  /* Gives a cell without a matrix and a row - the empty corner cell, a choice header, the footer title -
+     the survey, and with it the id generator, but not the matrix: a cell with the matrix gets a tooltip. */
+  public surveyOwner: QuestionMatrixDropdownModelBase;
+  public isEmpty: boolean;
+  public colSpans: number = 1;
+  public panel: PanelModel;
+  public isActionsCell: boolean = false;
+  public isErrorsCell: boolean = false;
+  public isDetailRowCell: boolean = false;
+  private classNameValue: string = "";
+  public constructor() {
+  }
+  public getSurvey(): ISurvey {
+    return this.matrix?.getSurvey() || this.row?.getSurvey() || this.surveyOwner?.getSurvey() || null;
+  }
+  private getGeneratedId(): string {
+    if (this.idValue === undefined) {
+      this.idValue = Base.getIdGeneratorBySurvey(this.getSurvey()).next("scell");
+    }
+    // RenderedCell does not extend Base; delegate id namespacing to the survey directly.
+    const survey = this.getSurvey();
+    return survey ? survey.getElementId(this.idValue) : this.idValue;
+  }
+  public get requiredMark(): string {
+    return this.column && this.column.isRenderedRequired ? this.column.requiredMark : undefined;
+  }
+  public get hasQuestion(): boolean {
+    return !!this.question && !this.isErrorsCell;
+  }
+  public get hasTitle(): boolean {
+    return !!this.locTitle;
+  }
+  public get hasPanel(): boolean {
+    return !!this.panel;
+  }
+  /* A column header keeps the column's id: the header row is rebuilt on every sort, and a renderer
+     that keys the header cells by id keeps their DOM nodes - and the keyboard focus in them. */
+  public get id(): string {
+    let id = this.question ? this.question.renderedId : (this.isColumnHeader ? this.column.renderedId : this.getGeneratedId());
+    if (this.isChoice) {
+      id += "-" + (Number.isInteger(this.choiceIndex) ? "index" + this.choiceIndex.toString() : this.item.id);
+    }
+    return getId(id, this.isErrorsCell, this.isDetailRowCell);
+  }
+  public get item(): ItemValue {
+    return this.itemValue;
+  }
+  public set item(val: ItemValue) {
+    this.itemValue = val;
+    if (!!val) {
+      val.hideCaption = true;
+    }
+  }
+  public get isChoice(): boolean {
+    return !!this.item;
+  }
+  // A cell of the header row that titles a column (createHeaderCell), not a choice of a column shown in multiple columns.
+  public isColumnHeader: boolean = false;
+  /* The header-click sort. Everything is read from the matrix and the column when it is asked for: the
+     header row is rebuilt on every sort, but a cell that survives - a locale change, a sort direction
+     flipped from code - still shows the current state. */
+  public get isSortable(): boolean {
+    const matrix = this.matrix;
+    return this.isColumnHeader && !!matrix && this.column.isSortable && matrix.canSortByHeaders && !matrix.isDesignMode;
+  }
+  public get sortDirection(): SortDirection {
+    if (!this.column || !this.matrix) return undefined;
+    const field = this.column.sortField;
+    const criterion = this.getSort().filter((item: ISortCriterion): boolean => item.field === field)[0];
+    if (!criterion) return undefined;
+    return criterion.direction === "desc" ? "desc" : "asc";
+  }
+  /* The column's 1-based level in the sort, shown in the indicator next to the arrow. Only while the sort has
+     more than one level, whatever maxSortLevel allows: a single level has no order to show.
+     The position counts every level, also one without a visible column, as sortDescription does. */
+  public get sortRank(): number {
+    if (!this.isSortable) return undefined;
+    const sort = this.getSort();
+    if (sort.length < 2) return undefined;
+    const field = this.column.sortField;
+    for (let i = 0; i < sort.length; i++) {
+      if (sort[i].field === field) return i + 1;
+    }
+    return undefined;
+  }
+  public get sortRankCss(): string {
+    return toCssClasses(this.matrix.cssClasses.headerCellSortRank);
+  }
+  public get sortIconName(): string {
+    const dir = this.sortDirection;
+    if (dir === "asc") return "icon-arrowup-16x16";
+    if (dir === "desc") return "icon-arrowdown-16x16";
+    return "icon-sort-16x16";
+  }
+  // aria-sort goes on one header only: the one the rows are sorted by first.
+  public get ariaSort(): "ascending" | "descending" {
+    if (!this.isSortable) return undefined;
+    const first = this.getSort()[0];
+    if (!first || first.field !== this.column.sortField) return undefined;
+    return first.direction === "desc" ? "descending" : "ascending";
+  }
+  /* The whole sort, levels in order: "Sorted by Price (High - Low), then by Product (Alphabet, A - Z)".
+     It is how a screen reader hears the later levels, which have no aria-sort. */
+  public get sortDescription(): string {
+    if (!this.isSortable) return undefined;
+    const sort = this.getSort();
+    if (sort.length === 0) return undefined;
+    const matrix = this.matrix;
+    const levels = sort.map((item: ISortCriterion): string =>
+      matrix.getLocalizationFormatString("sortOrderLevelText", this.getSortFieldTitle(item.field),
+        this.getSortDirectionText(item.field, item.direction === "desc" ? "desc" : "asc")));
+    const order = levels.reduce((res: string, level: string): string => matrix.getLocalizationFormatString("sortOrderNextText", res, level));
+    return matrix.getLocalizationFormatString("sortOrderText", order);
+  }
+  public get sortDescriptionId(): string {
+    return this.id + "_sortDescription";
+  }
+  // The label of the direction the column is sorted in now: "High - Low" for a number column.
+  public get sortTooltip(): string {
+    if (!this.isSortable) return undefined;
+    const dir = this.sortDirection;
+    return !!dir ? this.getSortDirectionText(this.column.sortField, dir) : undefined;
+  }
+  public get sortAriaLabel(): string {
+    if (!this.isSortable) return undefined;
+    return this.matrix.getLocalizationFormatString("sortByColumnText", this.column.title);
+  }
+  public get sortCss(): string {
+    const css = this.matrix.cssClasses;
+    const dir = this.sortDirection;
+    return toCssClasses(css.headerCellSort,
+      dir === "asc" && css.headerCellSortAsc, dir === "desc" && css.headerCellSortDesc, !dir && css.headerCellSortNone,
+      !!this.sortRank && css.headerCellSortRanked);
+  }
+  public get sortButtonCss(): string {
+    return toCssClasses(this.matrix.cssClasses.headerCellSortButton);
+  }
+  public get sortTitleCss(): string {
+    return toCssClasses(this.matrix.cssClasses.headerCellSortTitle);
+  }
+  // As for the pager: no new sort while a page is read or a page move waits for its validators.
+  public get canToggleSort(): boolean {
+    const matrix = this.matrix;
+    return !!matrix && !matrix.isDataLoading && !matrix.isPageMovePending;
+  }
+  /* append: Shift, Ctrl or Cmd was held - the column joins the sort instead of replacing it (a sorted
+     column under maxSortLevel above 1 keeps its level either way: matrix.toggleSort). false: the
+     sort did not change - the page it would replace has an error, or the click was not allowed now. */
+  public toggleSort(append?: boolean): boolean {
+    if (!this.isSortable || !this.canToggleSort) return false;
+    return this.matrix.toggleSort(this.column.sortField, append);
+  }
+  private getSort(): Array<ISortCriterion> {
+    return this.matrix.sortCriteria || [];
+  }
+  // The column first: one whose cell type has no sortable value can be sorted from code. A detail question has a title too.
+  private getSortFieldTitle(field: string): string {
+    const column = this.matrix.columns.filter((item: MatrixDropdownColumn): boolean => item.sortField === field)[0];
+    if (!!column) return column.title;
+    const detail = this.matrix.getDesignSortFields().filter((item: { field: string, title: string }): boolean => item.field === field)[0];
+    return !!detail ? detail.title : field;
+  }
+  private getSortDirectionText(field: string, direction: SortDirection): string {
+    const locName = getSortDirectionLocStringName(this.matrix.getSortFieldDataType(field), direction);
+    return this.matrix.getLocalizationString(locName);
+  }
+  public get isItemChoice(): boolean {
+    return this.isChoice && !this.isOtherChoice;
+  }
+  public get choiceValue(): any {
+    return this.isChoice ? this.item.value : null;
+  }
+  public get isCheckbox(): boolean {
+    return this.isItemChoice && this.question.isDescendantOf("checkbox");
+  }
+  public get isRadio(): boolean {
+    return this.isItemChoice && this.question.isDescendantOf("radiogroup");
+  }
+  public get isFirstChoice(): boolean {
+    return this.choiceIndex === 0;
+  }
+  public set className(val: string) {
+    this.classNameValue = val;
+  }
+  public get className(): string {
+    const hasQuestion = this.hasQuestion;
+    return toCssClasses(
+      this.classNameValue,
+      this.isSortable && this.matrix.cssClasses.headerCellSortable,
+      hasQuestion && this.question.errors.length > 0 && this.question.cssClasses.hasError,
+      hasQuestion && this.question.isAnswered && this.question.cssClasses.answered
+    );
+  }
+  public get cellQuestionWrapperClassName(): string {
+    return this.cell.getQuestionWrapperClassName(this.matrix.cssClasses.cellQuestionWrapper);
+  }
+  public get isVisible(): boolean {
+    return (!this.hasQuestion && !this.isErrorsCell) || !this.matrix?.isMobile || this.question.isVisible;
+  }
+  public get showResponsiveTitle(): boolean {
+    return this.hasQuestion && this.matrix?.isMobile;
+  }
+  public get responsiveTitleCss(): string {
+    return toCssClasses(this.matrix.cssClasses.cellResponsiveTitle);
+  }
+  public get showErrors(): boolean {
+    return this.hasQuestion && this.matrix.isMobile;
+  }
+  public get showErrorsTop(): boolean {
+    return this.showErrors && this.matrix.getErrorLocation() === "top";
+  }
+  public get showErrorsBottom(): boolean {
+    return this.showErrors && this.matrix.getErrorLocation() === "bottom";
+  }
+  public get responsiveLocTitle(): LocalizableString {
+    return this.cell.column.locTitle;
+  }
+  public get headers(): string {
+    if (this.cell && this.cell.column) {
+      if (this.matrix.IsMultiplyColumn(this.cell.column)) {
+        if (!!this.item) {
+          return this.item.locText.renderedHtml;
+        } else {
+          return "";
+        }
+      }
+      let cellHint = this.cell.column.cellHint;
+      if (!!cellHint) {
+        if (cellHint.trim() === "") return "";
+        return this.cell.column["locCellHint"].renderedHtml;
+      }
+      if (this.hasQuestion && this.question.isVisible && this.question.title)
+        return this.question.title;
+      return this.cell.column.title;
+    }
+    if (this.hasQuestion && this.question.isVisible) {
+      return this.question.locTitle.renderedHtml;
+    }
+    if (this.hasTitle) {
+      return this.locTitle.renderedHtml || "";
+    }
+    return "";
+  }
+  getTitle(): string {
+    return (this.matrix && this.matrix.showHeader) ? this.headers : "";
+  }
+  public calculateFinalClassName(matrixCssClasses: any): string {
+    const questionCss = this.cell.question.cssClasses;
+    // 'text-align': $data.isChoice ? 'center':
+    const questionClasses = toCssClasses(!!questionCss && questionCss.itemValue, !!questionCss && questionCss.asCell);
+    return toCssClasses(
+      questionClasses,
+      !questionClasses && !!matrixCssClasses && matrixCssClasses.cell,
+      this.isChoice && matrixCssClasses.choiceCell
+    );
+  }
+  public focusIn(): void {
+    if (this.question) {
+      this.question.focusIn();
+    }
+  }
+}
+
+export class QuestionMatrixDropdownRenderedRow extends Base {
+  @property({ defaultValue: false }) isGhostRow: boolean;
+  @property({ defaultValue: false }) isAdditionalClasses: boolean;
+  @property({ defaultValue: true }) visible: boolean;
+  public hasEndActions: boolean = false;
+  public row: MatrixDropdownRowModelBase;
+  public isErrorsRow = false;
+  public cells: Array<QuestionMatrixDropdownRenderedCell> = [];
+
+  public constructor(public cssClasses: any, public isDetailRow: boolean = false) {
+    super();
+  }
+  public getSurvey(isLive: boolean = false): ISurvey {
+    return this.row ? this.row.getSurvey() : null;
+  }
+  private generatedIdValue: string;
+  private getGeneratedId(): string {
+    if (this.generatedIdValue === undefined) {
+      this.generatedIdValue = Base.getIdGeneratorBySurvey(this.getSurvey()).next("smrow");
+    }
+    return this.composeElementId(this.generatedIdValue);
+  }
+  public get id(): string {
+    // Base the DOM row id on renderedId (SSR-namespaced). Header/error rows have no model row, so
+    // they draw a generator-produced id instead of leaking the internal uniqueId.
+    const base = this.row ? this.row.renderedId : this.getGeneratedId();
+    return getId(base, this.isErrorsRow, this.isDetailRow);
+  }
+  public get dropTargetId(): string {
+    return this.row?.id;
+  }
+  public get attributes() {
+    if (!this.row) return {};
+    return { "data-sv-drop-target-matrix-row": this.row.id };
+  }
+  public get className(): string {
+    return toCssClasses(
+      this.cssClasses.row,
+      this.isErrorsRow && this.cssClasses.errorRow,
+      !this.isDetailRow && !this.isErrorsRow && this.cssClasses.dataRow,
+      this.isDetailRow && this.cssClasses.detailRow,
+      this.row?.hasPanel && this.cssClasses.rowHasPanel,
+      this.row?.isDetailPanelShowing && !this.isDetailRow && this.cssClasses.expandedRow,
+      this.hasEndActions && this.cssClasses.rowHasEndActions,
+      this.isGhostRow && this.cssClasses.ghostRow,
+      this.isAdditionalClasses && this.cssClasses.rowAdditional
+    );
+  }
+  private rootElement: HTMLTableRowElement;
+  public setRootElement(val: HTMLTableRowElement): void {
+    this.rootElement = val;
+  }
+  public getRootElement(): HTMLTableRowElement {
+    return this.rootElement;
+  }
+  public focusCell(cellIndex: number): void {
+    if (this.rootElement) {
+      const inputElementSelector = `:scope td:nth-of-type(${cellIndex + 1}) input, :scope td:nth-of-type(${cellIndex + 1}) button`;
+      const inputElement = this.rootElement.querySelectorAll(inputElementSelector)[0] as HTMLInputElement;
+      if (inputElement) {
+        inputElement.focus();
+      }
+    }
+  }
+}
+export class QuestionMatrixDropdownRenderedErrorRow extends QuestionMatrixDropdownRenderedRow {
+  public isErrorsRow: boolean = true;
+
+  constructor(cssClasses: any) {
+    super(cssClasses);
+  }
+  public get attributes() {
+    return {};
+  }
+  public get className(): string {
+    return toCssClasses(this.cssClasses.row, this.cssClasses.errorRow);
+  }
+  public onAfterCreated(): void {
+    const callback = () => {
+      this.visible = this.cells.some((cell) => cell.question && cell.question.hasVisibleErrors);
+    };
+    this.cells.forEach((cell) => {
+      if (cell.question) {
+        cell.question.registerFunctionOnPropertyValueChanged("hasVisibleErrors", callback);
+      }
+    });
+    callback();
+  }
+}
+
+export class QuestionMatrixDropdownRenderedEmptyRow extends QuestionMatrixDropdownRenderedRow {
+  public isErrorsRow: boolean = false;
+
+  constructor(cssClasses: any, private customId: string) {
+    super(cssClasses);
+  }
+  public get attributes() {
+    return {};
+  }
+  public get dropTargetId() {
+    return this.customId;
+  }
+  public get className(): string {
+    return toCssClasses(this.cssClasses.row, this.cssClasses.rowEmpty);
+  }
+}
+
+export class QuestionMatrixDropdownRenderedTable extends Base {
+  private footerRowValue: QuestionMatrixDropdownRenderedRow;
+  private hasRemoveRowsValue: boolean;
+  private rowsActions: Array<Array<IAction>>;
+  // The Action instances an onGetMatrixRowActions handler gave: the application may cache and push them again.
+  private suppliedRowActions: Array<IAction> = [];
+  private cssClasses: any;
+  @propertyArray({
+    onPush: (_: any, i: number, target: QuestionMatrixDropdownRenderedTable) => {
+      target.updateRenderedRows();
+    },
+    onRemove: (_: any, i: number, target: QuestionMatrixDropdownRenderedTable) => {
+      target.updateRenderedRows();
+    }
+  }) rows: Array<QuestionMatrixDropdownRenderedRow>;
+  protected getIsAnimationAllowed(): boolean {
+    return super.getIsAnimationAllowed() && this.matrix.animationAllowed;
+  }
+  private getRenderedRowsAnimationOptions(): IAnimationGroupConsumer<QuestionMatrixDropdownRenderedRow> {
+    const onBeforeRunAnimation = (el: HTMLElement) => {
+      if (this.matrix.isMobile) {
+        prepareElementForVerticalAnimation(el);
+      } else {
+        el.querySelectorAll(":scope > td > *").forEach((el: HTMLElement) => {
+          prepareElementForVerticalAnimation(el);
+        });
+      }
+    };
+    const onAfterRunAnimation = (el: HTMLElement) => {
+      if (this.matrix.isMobile) {
+        cleanHtmlElementAfterAnimation(el);
+      } else {
+        el.querySelectorAll(":scope > td > *").forEach((el: HTMLElement) => {
+          cleanHtmlElementAfterAnimation(el);
+        });
+      }
+    };
+    return {
+      isAnimationEnabled: () => {
+        return this.animationAllowed;
+      },
+      getRerenderEvent: () => this.onElementRerendered,
+      getAnimatedElement(el: QuestionMatrixDropdownRenderedRow) {
+        return el.getRootElement();
+      },
+      getLeaveOptions: () => {
+        return { cssClass: this.cssClasses.rowLeave, onBeforeRunAnimation, onAfterRunAnimation };
+      },
+      getEnterOptions: (_, info) => {
+        return { cssClass: this.cssClasses.rowEnter, onBeforeRunAnimation, onAfterRunAnimation };
+      },
+      getKey: (item) => {
+        return item.id;
+      }
+    };
+  }
+
+  @propertyArray() private _renderedRows: Array<QuestionMatrixDropdownRenderedRow> = [];
+  public updateRenderedRows(): void {
+    this.renderedRows = this.rows;
+  }
+  private renderedRowsAnimation = new AnimationGroup(this.getRenderedRowsAnimationOptions(), (val) => {
+    this._renderedRows = val;
+  }, () => this._renderedRows);
+
+  public get renderedRows(): Array<QuestionMatrixDropdownRenderedRow> {
+    return this._renderedRows;
+  }
+  public set renderedRows(val: Array<QuestionMatrixDropdownRenderedRow>) {
+    this.renderedRowsAnimation.sync(val);
+  }
+  public get wrapperDropTargetId() {
+    return this.renderedRows[this.renderedRows.length - 1]?.dropTargetId;
+  }
+
+  public constructor(public matrix: QuestionMatrixDropdownModelBase) {
+    super();
+    this.build();
+  }
+  public get showTable(): boolean {
+    return this.getPropertyValue("showTable", true);
+  }
+  public get showHeader(): boolean {
+    return this.getPropertyValue("showHeader");
+  }
+  public get showFooter(): boolean {
+    return this.matrix.hasFooter && this.matrix.isColumnLayoutHorizontal;
+  }
+  public get hasFooter(): boolean {
+    return !!this.footerRow;
+  }
+  public get hasRemoveRows(): boolean {
+    return this.hasRemoveRowsValue;
+  }
+  private isRequireResetValue: boolean;
+  public isRequireReset(): boolean {
+    return this.isRequireResetValue || this.hasRemoveRows != this.matrix.canRemoveRows || !this.matrix.isColumnLayoutHorizontal;
+  }
+  public requireReset(): void {
+    this.isRequireResetValue = true;
+  }
+  // requireReset() was called: unlike isRequireReset(), not what the table's layout or its remove column says.
+  public isResetRequested(): boolean {
+    return !!this.isRequireResetValue;
+  }
+
+  /* A stored property: a rebind of the rows builds the header again (updateAfterRowsRebound) in the table
+     the renderers keep, and they follow it. */
+  public get headerRow(): QuestionMatrixDropdownRenderedRow {
+    return this.getPropertyValue("headerRow");
+  }
+  public get footerRow(): QuestionMatrixDropdownRenderedRow {
+    return this.footerRowValue;
+  }
+  public get isRowsDragAndDrop(): boolean {
+    const matrix = getDynamicMatrix(this.matrix);
+    return matrix?.isRowsDragAndDrop && matrix.isColumnLayoutHorizontal && !matrix.isMobile;
+  }
+
+  private get showCellErrorsTop() {
+    //todo
+    return this.matrix.getErrorLocation() === "top";
+  }
+  private get showCellErrorsBottom() {
+    //todo
+    return this.matrix.getErrorLocation() === "bottom";
+  }
+
+  protected build() {
+    this.hasRemoveRowsValue = this.matrix.canRemoveRows;
+    //build rows now
+    this.matrix.visibleRows;
+    this.cssClasses = this.matrix.cssClasses;
+    this.buildRowsActions();
+    this.buildHeader();
+    this.buildRows();
+    this.buildFooter();
+    this.updateShowTable();
+  }
+  public updateShowTable() {
+    const showTable =
+      this.rows.length > 0 ||
+      this.matrix.isDesignMode ||
+      !this.matrix.getShowColumnsIfEmpty();
+    this.setPropertyValue("showTable", showTable);
+  }
+  public onAddedRow(row: MatrixDropdownRowModelBase, index: number): void {
+    if (this.getRenderedDataRowCount() >= this.matrix.visibleRows.length)
+      return;
+    let rowIndex = this.getRenderedRowIndexByIndex(index);
+    this.rowsActions.splice(index, 0, this.buildRowActions(row));
+    this.addHorizontalRow(this.rows, row, rowIndex);
+    this.updateShowTable();
+  }
+  private getRenderedRowIndexByIndex(index: number): number {
+    let res = 0;
+    let dataRowIndex = 0;
+    for (var i = 0; i < this.rows.length; i++) {
+      if (dataRowIndex === index) {
+        if (this.rows[i].isErrorsRow && !this.showCellErrorsTop) {
+          res++;
+          if (i + 1 < this.rows.length && this.rows[i + 1].isDetailRow) {
+            res ++;
+          }
+        } else if (this.rows[i].isDetailRow) {
+          res++;
+        }
+        break;
+      }
+      res++;
+      if (!(this.rows[i].isErrorsRow) && !this.rows[i].isDetailRow) dataRowIndex++;
+    }
+    if (dataRowIndex < index) return this.rows.length;
+    return res;
+  }
+  private getRenderedDataRowCount(): number {
+    var res = 0;
+    for (var i = 0; i < this.rows.length; i++) {
+      if (!(this.rows[i].isErrorsRow) && !this.rows[i].isDetailRow) res++;
+    }
+    return res;
+  }
+
+  public onRemovedRow(row: MatrixDropdownRowModelBase) {
+    var rowIndex = this.getRenderedRowIndex(row);
+    if (rowIndex < 0) return;
+    this.rowsActions.splice(rowIndex, 1);
+    var removeCount = 1;
+    if (
+      rowIndex < this.rows.length - 1 && this.showCellErrorsBottom &&
+      this.rows[rowIndex + 1].isErrorsRow
+    ) {
+      removeCount++;
+    }
+    if (
+      rowIndex < this.rows.length - 1 &&
+      (this.rows[rowIndex + 1].isDetailRow ||
+        this.showCellErrorsBottom && rowIndex + 1 < this.rows.length - 1 && this.rows[rowIndex + 2].isDetailRow
+      )
+    ) {
+      removeCount++;
+    }
+    if (rowIndex > 0 && this.showCellErrorsTop && this.rows[rowIndex - 1].isErrorsRow) {
+      rowIndex--;
+      removeCount++;
+    }
+    this.rows.splice(rowIndex, removeCount);
+    this.updateShowTable();
+  }
+  public onDetailPanelChangeVisibility(row: MatrixDropdownRowModelBase, isShowing: boolean): void {
+    const rowIndex = this.getRenderedRowIndex(row);
+    if (rowIndex < 0) return;
+    let currentIndex = rowIndex;
+    if (this.showCellErrorsBottom) currentIndex++;
+    var panelRowIndex =
+      currentIndex < this.rows.length - 1 && this.rows[currentIndex + 1].isDetailRow
+        ? currentIndex + 1
+        : -1;
+    if ((isShowing && panelRowIndex > -1) || (!isShowing && panelRowIndex < 0))
+      return;
+    if (isShowing) {
+      var detailRow = this.createDetailPanelRow(row, this.rows[rowIndex]);
+      this.rows.splice(currentIndex + 1, 0, detailRow);
+    } else {
+      this.rows.splice(panelRowIndex, 1);
+    }
+  }
+  public focusActionCell(row: MatrixDropdownRowModelBase, actionCellIndex: number): void {
+    let row2Focus = this.rows[this.rows.length - 1];
+    if (this.matrix.isColumnLayoutHorizontal) {
+      const nextRenderedRowIndex = this.getRenderedRowIndex(row);
+      row2Focus = this.rows[nextRenderedRowIndex];
+    }
+    row2Focus?.focusCell(actionCellIndex);
+  }
+  private getRenderedRowIndex(row: MatrixDropdownRowModelBase): number {
+    for (var i = 0; i < this.rows.length; i++) {
+      if (this.rows[i].row == row) return i;
+    }
+    return -1;
+  }
+  protected buildRowsActions() {
+    this.rowsActions = [];
+    var rows = this.matrix.visibleRows;
+    for (var i = 0; i < rows.length; i++) {
+      this.rowsActions.push(this.buildRowActions(rows[i]));
+    }
+  }
+  /* The rows were rebound to other records (MatrixRenderedTableHost.updateAfterRowsRebound): the table keeps
+     its rendered rows. What it built from the records and the view is built again - the row actions, and the
+     header, whose sort state a rebuild used to bring (an edit of a sort item re-sorts and changes no
+     question property); a column header keeps its id. Returns false when the table has to be reset. */
+  public updateAfterRowsRebound(): boolean {
+    if (!this.updateRowsActions()) return false;
+    this.buildHeader();
+    // What an action computes from its row's position (the drag handle's label) reads it, and follows.
+    this.setPropertyValue("rowsRebindCount", this.rowsRebindCount + 1);
+    return true;
+  }
+  public get rowsRebindCount(): number {
+    return this.getPropertyValue("rowsRebindCount", 0);
+  }
+  /* The actions of a row follow its record and its position - the remove button lockedRowCount and
+     onMatrixAllowRemoveRow decide, the drag handle the visible index locks, whatever an onGetMatrixRowActions
+     handler gives - so they are built again, and every row keeps its action cells: without a handler the
+     actions it has stay, with one its containers take the new ones. Returns false when a row's actions are
+     not the same ones by id: its cells change (an empty cell, the css class of each action), and only a new
+     table shows that. */
+  private updateRowsActions(): boolean {
+    const oldRowsActions = this.rowsActions;
+    // The supplied actions are listed per build: the list ends as the one of the actions the containers hold.
+    const oldSupplied = this.suppliedRowActions;
+    this.suppliedRowActions = [];
+    this.buildRowsActions();
+    const newRowsActions = this.rowsActions;
+    const newSupplied = this.suppliedRowActions;
+    this.suppliedRowActions = oldSupplied.concat(newSupplied);
+    const isSame = oldRowsActions.length === newRowsActions.length &&
+      newRowsActions.every((actions: Array<IAction>, index: number): boolean => isSameActionIds(actions, oldRowsActions[index]));
+    if (!isSame || !this.hasRowActionsHandler()) {
+      this.rowsActions = oldRowsActions;
+      newRowsActions.forEach((actions: Array<IAction>): void => { this.disposeBuiltActions(actions); });
+      this.suppliedRowActions = oldSupplied;
+      return isSame;
+    }
+    const positions = new Map<MatrixDropdownRowModelBase, number>();
+    this.matrix.visibleRows.forEach((row: MatrixDropdownRowModelBase, index: number): void => { positions.set(row, index); });
+    this.rows.forEach((renderedRow: QuestionMatrixDropdownRenderedRow): void => {
+      if (renderedRow.isErrorsRow || renderedRow.isDetailRow || !positions.has(renderedRow.row)) return;
+      const rowIndex = positions.get(renderedRow.row);
+      renderedRow.cells.forEach((cell: QuestionMatrixDropdownRenderedCell, cellIndex: number): void => {
+        if (!cell.isActionsCell || !cell.item) return;
+        const location = cellIndex === 0 && this.hasActionCellInRows("start") ? "start" : "end";
+        const container = <ActionContainer>cell.item.value;
+        const oldActions = [].concat(container.actions);
+        container.setItems(this.getRowActions(rowIndex, location));
+        this.disposeBuiltActions(oldActions);
+      });
+    });
+    this.suppliedRowActions = newSupplied;
+    return true;
+  }
+  // An onGetMatrixRowActions handler may give each record its own actions; a survey without the event is asked as one with a handler.
+  private hasRowActionsHandler(): boolean {
+    const survey: any = this.matrix.survey;
+    if (!survey) return false;
+    const event = survey.onGetMatrixRowActions;
+    return !event || !event.isEmpty;
+  }
+  // The actions the table created; an Action instance the application supplied stays usable (see dispose).
+  private disposeBuiltActions(actions: Array<IAction>): void {
+    (actions || []).forEach((action: IAction): void => {
+      if (action instanceof BaseAction && this.suppliedRowActions.indexOf(action) < 0) action.dispose();
+    });
+  }
+  protected createRenderedRow(cssClasses: any, isDetailRow: boolean = false) {
+    return new QuestionMatrixDropdownRenderedRow(cssClasses, isDetailRow);
+  }
+  protected createErrorRenderedRow(cssClasses: any): QuestionMatrixDropdownRenderedErrorRow {
+    return new QuestionMatrixDropdownRenderedErrorRow(cssClasses);
+  }
+  protected createEmptyRenderedRow(cssClasses: any): QuestionMatrixDropdownRenderedEmptyRow {
+    return new QuestionMatrixDropdownRenderedEmptyRow(cssClasses, this.matrix.id);
+  }
+  protected buildHeader() {
+    var colHeaders =
+      this.matrix.isColumnLayoutHorizontal && this.matrix.showHeader;
+    var isShown =
+      colHeaders ||
+      (this.matrix.hasRowText && !this.matrix.isColumnLayoutHorizontal);
+    this.setPropertyValue("showHeader", isShown);
+    if (!isShown) return;
+    this.setPropertyValue("headerRow", this.createRenderedRow(this.cssClasses));
+    if (this.hasActionCellInRows("start")) {
+      this.headerRow.cells.push(this.createHeaderCell(null, "action"));
+    }
+    if (this.matrix.hasRowText && this.matrix.showHeader) {
+      this.headerRow.cells.push(this.createHeaderCell(null));
+    }
+    if (this.matrix.isColumnLayoutHorizontal) {
+      for (var i = 0; i < this.matrix.columns.length; i++) {
+        var column = this.matrix.columns[i];
+        if (!column.isColumnVisible) continue;
+        if (this.matrix.IsMultiplyColumn(column)) {
+          this.createMutlipleColumnsHeader(column);
+        } else {
+          this.headerRow.cells.push(this.createHeaderCell(column));
+        }
+      }
+    } else {
+      var rows = this.matrix.visibleRows;
+      for (var i = 0; i < rows.length; i++) {
+        const cell = this.createTextCell(rows[i].locText);
+        this.setHeaderCellCssClasses(cell);
+        cell.row = rows[i];
+        this.headerRow.cells.push(cell);
+      }
+      if (this.matrix.hasFooter) {
+        const cell = this.createTextCell(this.matrix.getFooterText());
+        this.setHeaderCellCssClasses(cell);
+        this.headerRow.cells.push(cell);
+      }
+    }
+    if (this.hasActionCellInRows("end")) {
+      this.headerRow.cells.push(this.createHeaderCell(null, "action"));
+    }
+  }
+  protected buildFooter() {
+    if (!this.showFooter) return;
+    this.footerRowValue = this.createRenderedRow(this.cssClasses);
+    if (this.hasActionCellInRows("start")) {
+      this.footerRow.cells.push(this.createHeaderCell(null, "action"));
+    }
+    if (this.matrix.hasRowText) {
+      const cell = this.createTextCell(this.matrix.getFooterText());
+      cell.className = toCssClasses(cell.className, this.cssClasses.footerTotalCell);
+      this.footerRow.cells.push(cell);
+    }
+    var cells = this.matrix.visibleTotalRow.cells;
+    for (var i = 0; i < cells.length; i++) {
+      var cell = cells[i];
+      if (!cell.column.isColumnVisible) continue;
+      if (this.matrix.IsMultiplyColumn(cell.column)) {
+        this.createMutlipleColumnsFooter(this.footerRow, cell);
+      } else {
+        var editCell = this.createEditCell(cell);
+        if (cell.column) {
+          this.setCellWidth(cell.column, editCell);
+        }
+        editCell.className = toCssClasses(editCell.className, this.cssClasses.footerCell);
+        this.footerRow.cells.push(editCell);
+      }
+    }
+    if (this.hasActionCellInRows("end")) {
+      this.footerRow.cells.push(this.createHeaderCell(null, "action"));
+    }
+  }
+  protected buildRows() {
+    this.runWithoutAnimations(() => {
+      var rows = this.matrix.isColumnLayoutHorizontal
+        ? this.buildHorizontalRows()
+        : this.buildVerticalRows();
+      this.rows = rows;
+    });
+  }
+  private hasActionCellInRowsValues: any = {};
+  private hasActionCellInRows(location: "start" | "end"): boolean {
+    if (this.hasActionCellInRowsValues[location] === undefined) {
+      this.hasActionCellInRowsValues[location] = this.hasActionsCellInLocaltion(location);
+    }
+    return this.hasActionCellInRowsValues[location];
+  }
+  private hasActionsCellInLocaltion(location: "start" | "end"): boolean {
+    if (location == "end" && this.hasRemoveRows) return true;
+    return this.matrix.visibleRows.some(
+      (row, index) => !this.isValueEmpty(this.getRowActions(index, location)));
+  }
+  private buildHorizontalRows(): Array<QuestionMatrixDropdownRenderedRow> {
+    var rows = this.matrix.visibleRows;
+    var renderedRows: Array<QuestionMatrixDropdownRenderedRow> = [];
+    const dynamicMatrix = getDynamicMatrix(this.matrix);
+    if (rows.length == 0 && !!dynamicMatrix && dynamicMatrix.allowRowReorder && dynamicMatrix.allowRowDragIn) {
+      const row = this.createEmptyRow();
+      const cell = this.createTextCell(dynamicMatrix.locNoRowsText);
+      cell.colSpans = this.headerRow && this.headerRow.cells.length || 1;
+      row.cells.push(cell);
+      renderedRows.push(row);
+    }
+    for (var i = 0; i < rows.length; i++) {
+      this.addHorizontalRow(
+        renderedRows,
+        rows[i]
+      );
+    }
+    return renderedRows;
+  }
+  private addHorizontalRow(
+    renderedRows: Array<QuestionMatrixDropdownRenderedRow>,
+    row: MatrixDropdownRowModelBase,
+    index: number = -1
+  ) {
+    const renderedRow = this.createHorizontalRow(row);
+    const errorRow = this.createErrorRow(renderedRow);
+    renderedRow.row = row;
+    if (index < 0) {
+      index = renderedRows.length;
+    }
+    if (this.matrix.isMobile) {
+      renderedRows.splice(index, 0, renderedRow);
+    } else {
+      renderedRows.splice(index, 0, ...(this.showCellErrorsTop ? [errorRow, renderedRow] : [renderedRow, errorRow]));
+      index++;
+    }
+    if (row.isDetailPanelShowing) {
+      renderedRows.splice(index + 1, 0, this.createDetailPanelRow(row, renderedRow));
+    }
+  }
+  private getActionsCellClassName(cell: QuestionMatrixDropdownRenderedCell = null): string {
+    const actionClasses: Array<string> = [];
+    if (cell.isActionsCell) {
+      const actions = (cell.item.value as ActionContainer).actions;
+      if (this.cssClasses.actionsCellPrefix) {
+        actions.forEach(action => {
+          actionClasses.push(this.cssClasses.actionsCellPrefix + "--" + action.id);
+        });
+      }
+    }
+    return toCssClasses(
+      this.cssClasses.actionsCell,
+      cell?.isDetailRowCell && this.cssClasses.detailRowCell,
+      !this.matrix.isColumnLayoutHorizontal && this.cssClasses.verticalCell,
+      ...actionClasses
+    );
+  }
+  private getRowActionsCell(rowIndex: number, location: "start" | "end", isDetailRow: boolean = false) {
+    const rowActions = this.getRowActions(rowIndex, location);
+    if (!this.isValueEmpty(rowActions)) {
+      const cell = new QuestionMatrixDropdownRenderedCell();
+      const actionContainer = this.matrix.allowAdaptiveActions ? new AdaptiveActionContainer() : new ActionContainer();
+      actionContainer.setActionsAppearance({ mode: this.matrix.isMobile ? "secondary" : "quaternary", size: "small", style: "neutral" });
+      if (!!this.matrix.survey && this.matrix.survey.getCss().actionBar) {
+        actionContainer.cssClasses = this.matrix.survey.getCss().actionBar;
+      }
+      actionContainer.setItems(rowActions);
+
+      const itemValue = new ItemValue(actionContainer);
+      cell.item = itemValue;
+      cell.isActionsCell = true;
+      cell.isDetailRowCell = isDetailRow;
+      cell.className = this.getActionsCellClassName(cell);
+      cell.row = this.matrix.visibleRows[rowIndex];
+      return cell;
+    }
+    return null;
+  }
+  // The rendered action with this id in a row's action cells: a default one or one an onGetMatrixRowActions handler gave.
+  public getRowAction(row: MatrixDropdownRowModelBase, id: string): Action {
+    for (const renderedRow of this.rows) {
+      if (renderedRow.row !== row || renderedRow.isErrorsRow || renderedRow.isDetailRow) continue;
+      for (const cell of renderedRow.cells) {
+        const container = cell.isActionsCell && !!cell.item ? <ActionContainer>cell.item.value : undefined;
+        const action = !!container ? container.actions.filter((item: Action) => item.id === id)[0] : undefined;
+        if (!!action) return action;
+      }
+    }
+    return undefined;
+  }
+  private getRowActions(rowIndex: number, location: "start" | "end") {
+    var actions = this.rowsActions[rowIndex];
+    if (!Array.isArray(actions)) return [];
+    return actions.filter((action) => {
+      if (!action.location) {
+        action.location = "start";
+      }
+      return action.location === location;
+    });
+  }
+  private buildRowActions(row: MatrixDropdownRowModelBase): Array<IAction> {
+    var actions: Array<IAction> = [];
+    this.setDefaultRowActions(row, actions);
+    if (!!this.matrix.survey) {
+      const defaultActions = [].concat(actions);
+      actions = this.matrix.survey.getUpdatedMatrixRowActions(
+        this.matrix,
+        row,
+        actions
+      );
+      actions.forEach((action: IAction): void => {
+        if (action instanceof BaseAction && defaultActions.indexOf(action) < 0)this.suppliedRowActions.push(action);
+      });
+    }
+    return actions;
+  }
+  /* The table disposes what it built: its rows and the containers of their actions, with the actions
+     the table created and the ones a container made from plain objects. An Action instance the
+     application supplied stays usable: a handler may cache it and push it into the next table. Under a
+     UI the next table is built before this one is disposed (disposeLeftObject), so such an action
+     can already belong to the next table's container: taking it out of this container must not take
+     it from its owner. */
+  public dispose(): void {
+    this.rows.forEach((row: QuestionMatrixDropdownRenderedRow): void => {
+      row.cells.forEach((cell: QuestionMatrixDropdownRenderedCell): void => {
+        const container = cell.isActionsCell && !!cell.item ? <ActionContainer>cell.item.value : undefined;
+        if (!container || typeof container.dispose !== "function") return;
+        const actions = container.actions;
+        for (let i = actions.length - 1; i >= 0; i--) {
+          const action = actions[i];
+          if (this.suppliedRowActions.indexOf(action) < 0) continue;
+          const owner = action.owner;
+          actions.splice(i, 1);
+          if (!!owner && owner !== <any>container) action.owner = owner;
+        }
+        container.dispose();
+      });
+      row.dispose();
+    });
+    this.suppliedRowActions = [];
+    super.dispose();
+  }
+  // The Dynamic Matrix's table adds the drag handle and the remove button before these.
+  protected setDefaultRowActions(
+    row: MatrixDropdownRowModelBase,
+    actions: Array<IAction>
+  ) {
+    if (row.hasPanel) {
+      actions.push(
+        new Action({
+          id: "show-detail",
+          css: this.matrix.isMobile ? "sv-action--show-detail-mobile" : undefined,
+          innerCss: this.matrix.cssClasses.detailButton,
+          title: <any>new ComputedUpdater(() => row.isDetailPanelShowing ? this.matrix.getLocalizationString("hideDetails") : this.matrix.getLocalizationString("showDetails")),
+          showTitle: this.matrix.isMobile,
+          location: this.matrix.isMobile ? "end" : "start",
+          iconName: this.matrix.isMobile ? "" : new ComputedUpdater(() => this.matrix.getIsDetailPanelShowing(row) ? this.cssClasses.detailIconExpandedId : this.cssClasses.detailIconId) as any as string,
+          visibleIndex: this.matrix.isMobile ? 10 : undefined,
+          appearance: { style: "brand" },
+          ariaExpanded: new ComputedUpdater(() => this.matrix.getIsDetailPanelShowing(row)) as any as boolean,
+          ariaControls: new ComputedUpdater(() => this.matrix.getIsDetailPanelShowing(row) ? row.detailPanelId : null) as any as string,
+          iconSize: "auto",
+          action: () => {
+            row.showHideDetailPanelClick();
+          },
+        })
+      );
+    }
+  }
+  private createErrorRow(
+    row: QuestionMatrixDropdownRenderedRow
+  ): QuestionMatrixDropdownRenderedRow {
+    const res = this.createErrorRenderedRow(this.cssClasses);
+    for (let i = 0; i < row.cells.length; i++) {
+      const cell = row.cells[i];
+      if (!cell.hasQuestion) {
+        res.cells.push(this.createEmptyCell(true));
+      } else if (this.matrix.IsMultiplyColumn(cell.cell.column)) {
+        if (cell.isFirstChoice) {
+          res.cells.push(this.createErrorCell(cell.cell));
+        } else {
+          res.cells.push(this.createEmptyCell(true));
+        }
+      } else {
+        res.cells.push(this.createErrorCell(cell.cell));
+      }
+    }
+    res.onAfterCreated();
+    return res;
+  }
+  private createEmptyRow(): QuestionMatrixDropdownRenderedRow {
+    const res = this.createEmptyRenderedRow(this.cssClasses);
+    return res;
+  }
+  private createHorizontalRow(row: MatrixDropdownRowModelBase): QuestionMatrixDropdownRenderedRow {
+    var res = this.createRenderedRow(this.cssClasses);
+    this.addRowActionsCell(row, res, "start");
+    if (this.matrix.hasRowText) {
+      var renderedCell = this.createTextCell(row.locText);
+      renderedCell.row = row;
+      res.cells.push(renderedCell);
+      this.setCellWidth(null, renderedCell);
+
+      renderedCell.className = toCssClasses(
+        renderedCell.className,
+        this.cssClasses.rowTextCell,
+        !this.matrix.isColumnLayoutHorizontal && this.cssClasses.columnTitleCell,
+        row.hasPanel && this.cssClasses.detailRowText
+      );
+    }
+    for (var i = 0; i < row.cells.length; i++) {
+      let cell = row.cells[i];
+      if (!cell.column.isColumnVisible) continue;
+      if (this.matrix.IsMultiplyColumn(cell.column)) {
+        this.createMutlipleEditCells(res, cell);
+      } else {
+        if (cell.column.isShowInMultipleColumns) {
+          cell.question.visibleChoices.map((c: ItemValue) => c.hideCaption = false);
+        }
+        var renderedCell = this.createEditCell(cell);
+        res.cells.push(renderedCell);
+        this.setCellWidth(cell.column, renderedCell);
+      }
+    }
+    this.addRowActionsCell(row, res, "end");
+    return res;
+  }
+  private addRowActionsCell(
+    row: MatrixDropdownRowModelBase,
+    renderedRow: QuestionMatrixDropdownRenderedRow,
+    location: "start" | "end"
+  ) {
+    var rowIndex = this.matrix.visibleRows.indexOf(row);
+    if (this.hasActionCellInRows(location)) {
+      const actions = this.getRowActionsCell(rowIndex, location, renderedRow.isDetailRow);
+      if (!!actions) {
+        renderedRow.cells.push(actions);
+        renderedRow.hasEndActions = true;
+      } else {
+        var cell = this.createEmptyCell();
+        cell.isDetailRowCell = renderedRow.isDetailRow;
+        renderedRow.cells.push(cell);
+      }
+    }
+  }
+  private createDetailPanelRow(
+    row: MatrixDropdownRowModelBase,
+    renderedRow: QuestionMatrixDropdownRenderedRow
+  ): QuestionMatrixDropdownRenderedRow {
+    const panelFullWidth: boolean = this.matrix.isDesignMode;
+    const res = this.createRenderedRow(this.cssClasses, true);
+    res.row = row;
+    let buttonCell = null;
+    if ((this.hasActionCellInRows("start") || this.matrix.hasRowText) && !panelFullWidth) {
+      buttonCell = this.createEmptyCell();
+      if (this.matrix.hasRowText && this.hasActionCellInRows("start")) {
+        buttonCell.colSpans = 2;
+      }
+      res.cells.push(buttonCell);
+    }
+    var actionsCell = null;
+    if (this.hasActionCellInRows("end")) {
+      actionsCell = this.createEmptyCell();
+    }
+    var cell = new QuestionMatrixDropdownRenderedCell();
+    cell.panel = row.detailPanel;
+    cell.colSpans =
+      renderedRow.cells.length -
+      (!!buttonCell ? buttonCell.colSpans : 0) -
+      (!!actionsCell ? actionsCell.colSpans : 0);
+    cell.className = this.cssClasses.detailPanelCell;
+    res.cells.push(cell);
+
+    if (!!actionsCell) {
+      if (this.matrix.isMobile) {
+        this.addRowActionsCell(row, res, "end");
+      } else {
+        res.cells.push(actionsCell);
+      }
+    }
+    if (
+      typeof this.matrix.onCreateDetailPanelRenderedRowCallback === "function"
+    ) {
+      this.matrix.onCreateDetailPanelRenderedRowCallback(res);
+    }
+    return res;
+  }
+
+  private buildVerticalRows(): Array<QuestionMatrixDropdownRenderedRow> {
+    var columns = this.matrix.columns;
+    var renderedRows = [];
+    for (var i = 0; i < columns.length; i++) {
+      var col = columns[i];
+      if (col.isColumnVisible) {
+        if (this.matrix.IsMultiplyColumn(col)) {
+          this.createMutlipleVerticalRows(renderedRows, col, i);
+        } else {
+          const renderedRow = this.createVerticalRow(col, i);
+          const errorRow = this.createErrorRow(renderedRow);
+          if (this.showCellErrorsTop) {
+            renderedRows.push(errorRow);
+            renderedRows.push(renderedRow);
+          } else {
+            renderedRows.push(renderedRow);
+            renderedRows.push(errorRow);
+          }
+        }
+      }
+    }
+    if (this.hasActionCellInRows("end")) {
+      renderedRows.push(this.createEndVerticalActionRow());
+    }
+    return renderedRows;
+  }
+  private createMutlipleVerticalRows(
+    renderedRows: Array<QuestionMatrixDropdownRenderedRow>,
+    column: MatrixDropdownColumn,
+    index: number
+  ) {
+    var choices = this.getMultipleColumnChoices(column);
+    if (!choices) return;
+    for (var i = 0; i < choices.length; i++) {
+      const renderedRow = this.createVerticalRow(column, index, choices[i], i);
+      const errorRow = this.createErrorRow(renderedRow);
+      if (this.showCellErrorsTop) {
+        renderedRows.push(errorRow);
+        renderedRows.push(renderedRow);
+      } else {
+        renderedRows.push(renderedRow);
+        renderedRows.push(errorRow);
+      }
+    }
+  }
+  private createVerticalRow(
+    column: MatrixDropdownColumn,
+    index: number,
+    choice: ItemValue = null,
+    choiceIndex: number = -1
+  ): QuestionMatrixDropdownRenderedRow {
+    var res = this.createRenderedRow(this.cssClasses);
+    if (this.matrix.showHeader) {
+      var lTitle = !!choice ? choice.locText : column.locTitle;
+      var hCell = this.createTextCell(lTitle);
+      hCell.column = column;
+      hCell.className = toCssClasses(hCell.className, this.cssClasses.rowTextCell, this.cssClasses.columnTitleCell);
+      res.cells.push(hCell);
+    }
+    var rows = this.matrix.visibleRows;
+    for (var i = 0; i < rows.length; i++) {
+      var rChoice = choice;
+      var rChoiceIndex = choiceIndex >= 0 ? choiceIndex : i;
+      var cell = rows[i].cells[index];
+      var visChoices = !!choice ? cell.question.visibleChoices : undefined;
+      if (!!visChoices && rChoiceIndex < visChoices.length) {
+        rChoice = visChoices[rChoiceIndex];
+      }
+      var rCell = this.createEditCell(cell, rChoice);
+      rCell.item = rChoice;
+      rCell.choiceIndex = rChoiceIndex;
+      res.cells.push(rCell);
+    }
+    if (this.matrix.hasTotal) {
+      res.cells.push(
+        this.createEditCell(this.matrix.visibleTotalRow.cells[index])
+      );
+    }
+
+    return res;
+  }
+  private createEndVerticalActionRow(): QuestionMatrixDropdownRenderedRow {
+    var res = this.createRenderedRow(this.cssClasses);
+    if (this.matrix.showHeader) {
+      res.cells.push(this.createEmptyCell());
+    }
+    var rows = this.matrix.visibleRows;
+    for (var i = 0; i < rows.length; i++) {
+      res.cells.push(this.getRowActionsCell(i, "end"));
+    }
+    if (this.matrix.hasTotal) {
+      res.cells.push(this.createEmptyCell());
+    }
+    return res;
+  }
+  private createMutlipleEditCells(
+    rRow: QuestionMatrixDropdownRenderedRow,
+    cell: MatrixDropdownCell,
+    isFooter: boolean = false
+  ) {
+    var choices = isFooter
+      ? this.getMultipleColumnChoices(cell.column)
+      : cell.question.visibleChoices;
+    if (!choices) return;
+    for (var i = 0; i < choices.length; i++) {
+      var rCell = this.createEditCell(cell, !isFooter ? choices[i] : undefined);
+      if (!isFooter) {
+        //rCell.item = choices[i];
+        this.setItemCellCssClasses(rCell);
+        rCell.choiceIndex = i;
+      }
+      rRow.cells.push(rCell);
+    }
+  }
+  private setItemCellCssClasses(cell: QuestionMatrixDropdownRenderedCell) {
+    cell.className = toCssClasses(
+      this.cssClasses.cell,
+      this.cssClasses.itemCell,
+      cell.isRadio && this.cssClasses.radioCell,
+      cell.isCheckbox && this.cssClasses.checkboxCell
+    );
+  }
+  private createEditCell(
+    cell: MatrixDropdownCell,
+    choiceItem: any = undefined
+  ): QuestionMatrixDropdownRenderedCell {
+    var res = new QuestionMatrixDropdownRenderedCell();
+    res.cell = cell;
+    res.row = cell.row;
+    res.column = cell.column;
+    res.question = cell.question;
+    res.matrix = this.matrix;
+    res.item = choiceItem;
+    res.isOtherChoice = !!choiceItem && !!cell.question && cell.question.otherItem === choiceItem;
+
+    res.className = res.calculateFinalClassName(this.cssClasses);
+    return res;
+  }
+  private createErrorCell(
+    cell: MatrixDropdownCell,
+    choiceItem: any = undefined
+  ): QuestionMatrixDropdownRenderedCell {
+    var res = new QuestionMatrixDropdownRenderedCell();
+    res.question = cell.question;
+    res.row = cell.row;
+    res.matrix = this.matrix;
+    res.isErrorsCell = true;
+    res.className = toCssClasses(
+      this.cssClasses.cell,
+      this.cssClasses.errorsCell,
+      this.showCellErrorsTop && this.cssClasses.errorsCellTop,
+      this.showCellErrorsBottom && this.cssClasses.errorsCellBottom
+    );
+    return res;
+  }
+  private createMutlipleColumnsFooter(
+    rRow: QuestionMatrixDropdownRenderedRow,
+    cell: MatrixDropdownCell
+  ) {
+    this.createMutlipleEditCells(rRow, cell, true);
+  }
+  private createMutlipleColumnsHeader(column: MatrixDropdownColumn) {
+    var choices = this.getMultipleColumnChoices(column);
+    if (!choices) return;
+    for (var i = 0; i < choices.length; i++) {
+      var cell = this.createTextCell(choices[i].locText);
+      this.setHeaderCell(column, cell);
+      this.setHeaderCellCssClasses(cell);
+      this.headerRow.cells.push(cell);
+    }
+  }
+  private getMultipleColumnChoices(column: MatrixDropdownColumn): any {
+    var choices = column.templateQuestion.choices;
+    if (!!choices && Array.isArray(choices) && choices.length == 0)
+      return [].concat(this.matrix.choices, column.getVisibleMultipleChoices());
+    choices = column.getVisibleMultipleChoices();
+    if (!choices || !Array.isArray(choices)) return null;
+    return choices;
+  }
+  private setHeaderCellCssClasses(cell: QuestionMatrixDropdownRenderedCell, cellType?: string, classMod?: string): void {
+    cell.className = toCssClasses(
+      this.cssClasses.headerCell,
+      this.matrix.isColumnLayoutHorizontal && this.cssClasses.columnTitleCell,
+      !!cell.isEmpty && this.cssClasses.emptyCell,
+      !!cellType && this.cssClasses.cell + "--" + cellType,
+      classMod
+    );
+  }
+  private createHeaderCell(
+    column: MatrixDropdownColumn,
+    cellType: string = null,
+    classMod?: string
+  ): QuestionMatrixDropdownRenderedCell {
+    let cell = !!column ? this.createTextCell(column.locTitle) : this.createEmptyCell();
+    cell.column = column;
+    cell.matrix = this.matrix;
+    cell.isColumnHeader = !!column;
+    this.setHeaderCell(column, cell);
+    if (!cellType) cellType = (!!column && column.cellType !== "default") ? column.cellType : this.matrix.cellType;
+    this.setHeaderCellCssClasses(cell, cellType, classMod);
+    return cell;
+  }
+  private setHeaderCell(
+    column: MatrixDropdownColumn,
+    cell: QuestionMatrixDropdownRenderedCell
+  ) {
+    this.setCellWidth(column, cell);
+  }
+  private setCellWidth(
+    column: MatrixDropdownColumn,
+    cell: QuestionMatrixDropdownRenderedCell
+  ) {
+    cell.minWidth = column != null ? this.matrix.getColumnWidth(column) : this.matrix.getRowTitleWidth();
+    cell.width = column != null ? column.width : this.matrix.getRowTitleWidth();
+  }
+  private createTextCell(
+    locTitle: LocalizableString
+  ): QuestionMatrixDropdownRenderedCell {
+    var cell = new QuestionMatrixDropdownRenderedCell();
+    /* The survey's id generator, the one the other cells of the row use: a cell without it would take
+       "scell_0" from the default generator while a cell next to it takes "scell_0" from the survey's,
+       and the renderers key the header cells by id. */
+    cell.surveyOwner = this.matrix;
+    cell.locTitle = locTitle;
+    if (!!this.cssClasses.cell) {
+      cell.className = this.cssClasses.cell;
+    }
+    return cell;
+  }
+  private createEmptyCell(isError: boolean = false): QuestionMatrixDropdownRenderedCell {
+    const res = this.createTextCell(null);
+    res.isEmpty = true;
+    res.className = toCssClasses(this.cssClasses.cell, this.cssClasses.emptyCell, isError && this.cssClasses.errorsCell);
+    return res;
+  }
+}

@@ -1,0 +1,496 @@
+import type { Locator, Page, Route } from "@playwright/test";
+import { expect, test as playwrightTest } from "@playwright/test";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+const environment = process.env.env;
+
+export const frameworks = environment
+  ? [environment]
+  : ["angular", "react", "vue3"/*, "js-ui"*/];
+
+// eslint-disable-next-line no-console
+//console.log("Frameworks: " + frameworks.join(", "));
+export const url = "http://127.0.0.1:8080/examples_test/default/";
+export const urlV2 = "http://127.0.0.1:8080/examples_test/default/";
+export const url_test = "http://127.0.0.1:8080/examples_test/";
+export const FLOAT_PRECISION = 0.01;
+
+// Serves a choicesByUrl request from the test itself, so no real web service is contacted.
+// Call it before initSurvey. The url does not have to exist: the request never leaves the browser.
+export async function mockChoicesByUrl(page: Page, requestUrl: string, response: any): Promise<void> {
+  await page.route(requestUrl, route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    headers: { "Access-Control-Allow-Origin": "*" },
+    body: JSON.stringify(response)
+  }));
+}
+
+// The test pages supply Open Sans through their fonts.css because survey-core ships no font. An
+// @font-face is fetched lazily, so anything that measures text - a popup sizing itself
+// to its content - would be laid out with the fallback font and keep that size once the
+// real font arrives. Requesting the faces explicitly (fonts.ready alone resolves before
+// a lazy face is even requested) makes the wait deterministic.
+const fontWeights = [400, 600, 700];
+
+export async function waitForFonts(page: Page): Promise<void> {
+  await page.evaluate(async (weights) => {
+    const fonts = (document as any).fonts;
+    if (!fonts) return;
+    await Promise.all(weights.map((weight) => fonts.load(`${weight} 16px "Open Sans"`)));
+    await fonts.ready;
+  }, fontWeights);
+}
+
+export async function compareScreenshot(
+  page: Page,
+  elementSelector: string | Locator | undefined,
+  screenshotName: string,
+  options: {
+      animations?: "disabled" | "allow",
+      caret?: "hide" | "initial",
+      mask?: Array<Locator>,
+      maskColor?: string,
+      maxDiffPixelRatio?: number,
+      maxDiffPixels?: number,
+      omitBackground?: boolean,
+      scale?: "css" | "device",
+      stylePath?: string | Array<string>,
+      threshold?: number,
+      timeout?: number,
+  } = {}) {
+  await waitForFonts(page);
+
+  let currentElement = elementSelector;
+  if (!!currentElement && typeof currentElement == "string") {
+    currentElement = page.locator(currentElement);
+  }
+
+  const pwOptions: {timeout: number, maxDiffPixels?: number} = {
+    timeout: 10000,
+    maskColor: "#000000",
+    ...options
+  };
+
+  if (!!currentElement) {
+    const element = (<Locator>currentElement).filter({ visible: true });
+    await expect.soft(element.nth(0)).toBeVisible();
+    await expect.soft(element.nth(0)).toHaveScreenshot(screenshotName, pwOptions);
+  } else {
+    await expect.soft(page).toHaveScreenshot(screenshotName, pwOptions);
+  }
+}
+
+export function getVisibleListItemByText(page: Page, text: string): Locator {
+  return page.locator(".sv-popup__container").filter({ visible: true }).getByRole("option", { name: text, exact: true });
+}
+
+export function getVisibleSelectListItemByText(page: Page, text: string): Locator {
+  return page.locator(".sv-popup__container .sd-selectlist__item", {
+    has: page.getByText(text, { exact: true })
+  }).filter({ visible: true });
+}
+
+export async function resetFocusToBody(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const rootNode = (window as any).survey.rootElement.getRootNode();
+    if (!!rootNode.activeElement) {
+      rootNode.activeElement.blur();
+    }
+    document.body.focus();
+  });
+}
+
+// The survey switches its layout on a ResizeObserver callback, so wait for the root class instead of a fixed timeout.
+export async function resizeToMobile(page: Page, width: number = 600, height: number = 1000): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await expect(page.locator(".sd-root-modern")).toHaveClass(/sd-root-modern--mobile/);
+}
+
+export async function resizeToDesktop(page: Page, width: number = 1920, height: number = 1080): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await expect(page.locator(".sd-root-modern")).not.toHaveClass(/sd-root-modern--mobile/);
+}
+
+// The test pages do not load the survey-core locale bundle. A test that shows a survey in another locale
+// loads it with this helper after page.goto and before initSurvey: a new page.goto drops it again.
+export async function loadSurveyLocales(page: Page, framework: string): Promise<void> {
+  if (framework === "react" || framework === "survey-js-ui") {
+    await page.addScriptTag({ url: "../../node_modules/survey-core/survey.i18n.min.js" });
+  } else {
+    await page.evaluate(async () => { await (window as any).loadSurveyLocales(); });
+  }
+}
+
+export const initSurvey = async (page: Page, framework: string, json: any, isDesignMode?: boolean, props?: any, afterInitializeModelCallback?: () => Promise<void>) => {
+  await waitForFonts(page);
+  if (!!props) {
+    Object.keys(props).forEach(name => {
+      if (typeof props[name] == "function") {
+        throw new Error(`Function '${name}' is passed over serialization boundary.`);
+      }
+    });
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.evaluate(([json, isDesignMode, props]) => {
+    // eslint-disable-next-line no-console
+    console.error = (msg) => {
+      throw new Error(msg);
+    };
+    // eslint-disable-next-line no-console
+    console.warn = (msg) => {
+      throw new Error(msg);
+    };
+    // eslint-disable-next-line no-console
+    console.log("surveyjs console.error and console.warn override");
+
+    (window as any).Survey.settings.animationEnabled = false;
+    const model = new (window as any).Survey.Model(json);
+    model.allowResizeComment = false;
+    model.setDesignMode(isDesignMode);
+    const surveyComplete = function (model) {
+      (window as any).SurveyResult = model.data;
+      // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+      document.getElementById("surveyResultElement")!.innerHTML = JSON.stringify(
+        model.data
+      );
+    };
+    if (!!props) {
+      for (var key in props) {
+        model[key] = props[key];
+      }
+    }
+    model.onComplete.add(surveyComplete);
+    (window as any).survey = model;
+    // Without the locale bundle the survey falls back to English silently, so a test that shows another
+    // locale must call loadSurveyLocales after page.goto.
+    const locales = (window as any).Survey.surveyLocalization.locales;
+    const checkLocale = (locale: string) => {
+      if (!!locale && !locales[locale] && !locales[locale.split("-")[0]]) {
+        throw new Error(`The survey locale "${locale}" is not loaded: call loadSurveyLocales(page, framework) after page.goto.`);
+      }
+    };
+    checkLocale(model.locale);
+    model.onLocaleChangedEvent.add((sender) => checkLocale(sender.locale));
+  }, [json, isDesignMode, props]);
+  afterInitializeModelCallback && await afterInitializeModelCallback();
+
+  // For survey-js-ui (Shadow DOM): set up the shadow root and load styles FIRST,
+  // then render the survey only after the stylesheet is fully loaded.
+  // This mirrors what a real user should do: ensure CSS is ready before rendering,
+  // so that CSS variables like --sd-mobile-width are available from the start.
+  if (framework === "survey-js-ui") {
+    await page.evaluate(() => {
+      const self: any = window;
+      // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+      const surveyElement: HTMLElement = document.getElementById("surveyElement") as HTMLElement;
+      surveyElement.innerHTML = "";
+
+      const shadowRoot = surveyElement.attachShadow({ mode: "open" });
+      const rootElement = document.createElement("div");
+      rootElement.classList.add("root-element");
+      const styles = document.createElement("style");
+      styles.textContent = `
+        *,
+        ::after,
+        ::before {
+            box-sizing: border-box;
+        }
+      `;
+      shadowRoot.appendChild(styles);
+
+      self.__surveyStylesLoaded = false;
+      // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+      const surveyLink = document.createElement("link");
+      surveyLink.rel = "stylesheet";
+      surveyLink.href = "../../node_modules/survey-core/survey-core.min.css";
+      surveyLink.onload = () => { self.__surveyStylesLoaded = true; };
+      surveyLink.onerror = () => { self.__surveyStylesLoaded = true; };
+      shadowRoot.appendChild(surveyLink);
+      shadowRoot.appendChild(rootElement);
+    });
+
+    await page.waitForFunction(() => (window as any).__surveyStylesLoaded === true, { timeout: 5000 });
+
+    await page.evaluate(() => {
+      const self: any = window;
+      // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+      const rootElement = document.getElementById("surveyElement")!.shadowRoot!.querySelector("div");
+      self.SurveyUI.renderSurvey(self.survey, rootElement);
+      delete self.__surveyStylesLoaded;
+    });
+  } else {
+    await page.evaluate(([framework]) => {
+      const self: any = window;
+      const model = self.survey;
+      // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+      const surveyElement: HTMLElement = document.getElementById("surveyElement") as HTMLElement;
+      if (framework === "react") {
+        if (!!self.root) {
+          self.root.unmount();
+        }
+        // eslint-disable-next-line surveyjs/eslint-plugin-i18n/allowed-in-shadow-dom
+        const root = (window as any).ReactDOMClient.createRoot(document.getElementById("surveyElement"));
+        (window as any).root = root;
+        root.render(
+          self.React.createElement(self.React.StrictMode, { children: self.React.createElement(self.SurveyReact.Survey, { model: model }) }),
+        );
+      } else if (framework === "angular" || framework == "vue3") {
+        self.window.setSurvey(model);
+      }
+    }, [framework, json, isDesignMode, props]);
+  }
+};
+
+export async function checkSurveyData(page: Page, json: any): Promise<void> {
+  const data = await page.evaluate(() => { return (window as any).survey.data; });
+  await expect(data).toStrictEqual(json);
+}
+
+export async function getSurveyData(page: Page) {
+  return await page.evaluate(() => { return (window as any).survey.data; });
+}
+
+export async function getSurveyResult(page: Page) {
+  return await page.evaluate(() => {
+    return (window as any).SurveyResult;
+  });
+}
+
+export async function getQuestionValue(page: Page) {
+  return await page.evaluate(() => {
+    return (window as any).survey.getAllQuestions()[0].value;
+  });
+}
+
+export async function getQuestionJson(page: Page) {
+  return await page.evaluate(() => {
+    return JSON.stringify((window as any).survey.getAllQuestions()[0].toJSON());
+  });
+}
+
+export async function getPanelJson(page: Page) {
+  return await page.evaluate(() => {
+    return JSON.stringify((window as any).survey.getAllPanels()[0].toJSON());
+  });
+}
+
+export async function setOptions(page: Page, questionName: string, modValue: any) {
+  await page.evaluate(([questionName, modValue]) => {
+    const mergeOptions = function (obj1, obj2) {
+      for (const attrname in obj2) {
+        obj1[attrname] = obj2[attrname];
+      }
+    };
+    const q = (window as any).survey.getQuestionByName(questionName);
+    mergeOptions(q, modValue);
+  }, [questionName, modValue]);
+}
+
+export async function checkSurveyWithEmptyQuestion(page: Page) {
+  const requiredMessage = page.locator(".sv-string-viewer").getByText("Response required.");
+  await expect(requiredMessage).toHaveCount(0);
+  await getButtonByText(page, "Complete").click();
+  await expect(requiredMessage).toHaveCount(1);
+  const surveyResult = await getSurveyResult(page);
+  expect(surveyResult).toEqual(undefined);
+}
+
+export async function getData(page: Page) {
+  return await page.evaluate(() => {
+    return (window as any).survey.data;
+  });
+}
+
+export async function setData(page: Page, newData: any) {
+  await page.evaluate((newData) => {
+    (window as any).survey.data = newData;
+    (window as any).survey.render();
+  }, newData);
+}
+
+export async function getTimeZone(page: Page): Promise<string> {
+  return await page.evaluate(() => {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  });
+}
+
+export async function setRowItemFlowDirection(page: Page) {
+  await page.evaluate(() => {
+    (window as any).Survey.settings.itemFlowDirection = "row";
+  });
+}
+
+export async function visibleInViewport (page: Page, locator: Locator) {
+  const rect = await locator.boundingBox();
+  return await page.evaluate((rect) => {
+    return (
+      rect?.y >= 0 &&
+      rect?.x >= 0 &&
+      rect?.y + rect?.height <= (window.innerHeight || (window as any).survey.rootElement.getRootNode().querySelector("div")!.clientHeight) &&
+      rect?.x + rect?.width <= (window.innerWidth || (window as any).survey.rootElement.getRootNode().querySelector("div")!.clientWidth)
+    );
+  }, rect);
+}
+export async function visibleInViewportForShadowDom (page: Page, selector: string, nth: number = 0) {
+  return await page.evaluate((args: any) => {
+    const node = (window as any).survey.rootElement.getRootNode().querySelectorAll(args.selector)[args.nth];
+    const rect = node.getBoundingClientRect();
+    return (
+      rect?.y >= 0 &&
+      rect?.x >= 0 &&
+      rect?.y + rect?.height <= (window.innerHeight || (window as any).survey.rootElement.getRootNode().querySelector("div")!.clientHeight) &&
+      rect?.x + rect?.width <= (window.innerWidth || (window as any).survey.rootElement.getRootNode().querySelector("div")!.clientWidth)
+    );
+  }, { selector, nth });
+}
+
+// Every test gets a new browser context, and a context starts with an empty HTTP cache, so
+// each test downloaded the test pages' CDN scripts (showdown, React from esm.sh)
+// again. The responses are kept in memory for the life of the worker process instead.
+// The pattern stays narrow on purpose: every request it matches makes a round trip to the
+// test process. Routes set by a test with page.route run first and still win.
+const cdnUrl = /^https:\/\/(?:cdnjs\.cloudflare\.com|esm\.sh)\//;
+type CdnResponse = { status: number, headers: { [name: string]: string }, body: Buffer, cacheable: boolean };
+const cdnResponses = new Map<string, Promise<CdnResponse | undefined>>();
+
+async function fetchCdnResponse(route: Route): Promise<CdnResponse | undefined> {
+  try {
+    const response = await route.fetch();
+    const headers = { ...response.headers() };
+    // The body is stored decoded, so the encoding and length of the original transfer no longer apply.
+    delete headers["content-encoding"];
+    delete headers["content-length"];
+    return { status: response.status(), headers, body: await response.body(), cacheable: response.ok() };
+  } catch(e) {
+    return undefined;
+  }
+}
+
+async function serveFromCdnCache(route: Route): Promise<void> {
+  const request = route.request();
+  if (request.method() !== "GET") return route.fallback();
+  const url = request.url();
+  let response = cdnResponses.get(url);
+  if (!response) {
+    response = fetchCdnResponse(route);
+    cdnResponses.set(url, response);
+  }
+  const cached = await response;
+  if (!cached?.cacheable && cdnResponses.get(url) === response) {
+    // Only 2xx responses are kept. A non-2xx one (a test may use a broken image on purpose)
+    // still answers the requests that waited for it, so it is not requested twice.
+    cdnResponses.delete(url);
+  }
+  // The fetch itself failed: let the browser make the request and fail the usual way.
+  if (!cached) return route.fallback();
+  const { cacheable, ...fulfillOptions } = cached;
+  await route.fulfill(fulfillOptions);
+}
+
+// The images, videos and embedded pages that the test JSON links on these hosts are answered
+// from e2e/test-assets, stored byte for byte. A download from the web made the tests depend on
+// the network, and a file changed or removed on the site changed a VRT picture or failed a test.
+// assets.json maps each URL to its file, content type and headers. A URL on these hosts that is
+// not listed there is aborted and logged rather than fetched: add its file and an entry.
+// Two kinds of URLs get a stand-in instead of the original: the YouTube embed pages get an empty
+// page, and the video (a 404 on its site, and Chromium plays no H.264) gets a one-second WebM. The tests
+// check that the iframe and the video are shown, not what they play.
+const testAssetUrl = /^https?:\/\/(?:(?:api\.)?surveyjs\.io|sample-videos\.com|www\.youtube\.com|youtu\.be)\//;
+type TestAsset = { file?: string, contentType?: string, headers?: { [name: string]: string }, status?: number };
+const testAssetsDir = join(__dirname, "test-assets");
+const testAssets: { [url: string]: TestAsset } = JSON.parse(readFileSync(join(testAssetsDir, "assets.json"), "utf8"));
+// The UI packages' brand info banner links this image itself. It comes from the product, not from
+// test JSON, so the tests fetch it from the site as a user's browser does; the CDN cache above
+// keeps one copy per worker.
+const productUrls = new Set(["https://surveyjs.io/Content/Images/poweredby.svg"]);
+
+async function serveTestAsset(route: Route): Promise<void> {
+  const url = route.request().url();
+  if (productUrls.has(url)) return serveFromCdnCache(route);
+  const asset = testAssets[url];
+  if (!asset) {
+    // eslint-disable-next-line no-console
+    console.warn(`No local copy of ${url} in e2e/test-assets/assets.json: the request is aborted.`);
+    return route.abort("blockedbyclient");
+  }
+  // An entry with only a status answers with that status: some tests show a broken image on purpose.
+  if (!asset.file) return route.fulfill({ status: asset.status });
+  await route.fulfill({ path: join(testAssetsDir, asset.file), contentType: asset.contentType, headers: asset.headers });
+}
+
+// The CDN cache and the local test files. The VRT and accessibility suites use it as is; the
+// e2e suite adds the page error check below.
+export const baseTest = playwrightTest.extend({
+  context: async ({ context }, use) => {
+    await context.route(cdnUrl, serveFromCdnCache);
+    await context.route(testAssetUrl, serveTestAsset);
+    await use(context);
+  }
+});
+
+export const test = baseTest.extend<{page: void, skipJSErrors: boolean}>({
+  skipJSErrors: [false, { option: false }],
+  page: async ({ page, skipJSErrors }, use) => {
+    const errors: Array<Error> = [];
+    page.addListener("pageerror", (error) => {
+      errors.push(error);
+    });
+    await use(page);
+    if (!skipJSErrors) {
+      expect(errors).toHaveLength(0);
+    }
+  }
+});
+interface IDragToElementAdditionalOptions {
+  elementPosition?: {x: number, y: number};
+  targetPosition?: {x: number, y: number};
+  steps?: number;
+}
+
+interface IDragToElementOptions {
+  page: Page;
+  element: Locator;
+  target: Locator;
+  options?: IDragToElementAdditionalOptions;
+}
+
+export async function doDrag({ page, element, target, options }: IDragToElementOptions):Promise<void> {
+  if (options?.elementPosition) {
+    await element.hover({
+      force: true,
+      position: {
+        x: options.elementPosition?.x,
+        y: options.elementPosition?.y
+      }
+    });
+  } else {
+    await element.hover({ force: true });
+  }
+  await page.mouse.down();
+  await target.scrollIntoViewIfNeeded();
+  const { x, y, width, height } = await <any>target.boundingBox();
+  const targetPositionX = x + (options?.targetPosition?.x || width / 2);
+  const targetPositionY = y + (options?.targetPosition?.y || height / 2);
+  await page.mouse.move(targetPositionX, targetPositionY, { steps: options?.steps || 20 });
+}
+
+export async function doDragDrop(options : IDragToElementOptions):Promise<void> {
+  await doDrag(options);
+  await options.page.mouse.up();
+}
+
+export async function waitUntilAllImagesLoad(page: Page): Promise<void> {
+  //https://github.com/microsoft/playwright/issues/6046
+  for (const img of await page.getByRole("img").all()) {
+    await expect(img).toHaveJSProperty("complete", true);
+    await expect(img).not.toHaveJSProperty("naturalWidth", 0);
+  }
+}
+
+export function getButtonByText(locator: Locator | Page, text: string) {
+  return locator.locator("button").filter({ has: locator.getByText(text, { exact: true }) });
+}
+
+export { expect };

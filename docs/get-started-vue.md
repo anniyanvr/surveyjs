@@ -1,72 +1,90 @@
-# Add a Survey to a Vue Application
+---
+title: Vue.js Form Library | Getting Started Guide
+description: SurveyJS Form Library for Vue.js is an open-source UI component that renders forms built from JSON schema in Vue.js applications. It offers a rich collection of reusable input fields and other form components and simplifies form handling by managing form state, validation, and submission.
+---
+# Vue.js Form Library
 
-This step-by-step tutorial will help you get started with the SurveyJS Library in a Vue application. To add a survey to your Vue application, follow the steps below:
+SurveyJS Form Library for Vue.js is a client-side component that uses JSON objects to render dynamic forms in and Vue.js applications and send submission data to a database for storage. These JSON objects contain key-value pairs representing various aspects of a form, including descriptions of each form field, instructions on how to organize form fields on the page, and how the form should behave in response to user interactions, such as submitting data, validating input, and displaying error messages. By loading the JSON schemas that define form layout and content, the Form Library dynamically generates the corresponding HTML elements and renders them using native Vue rendering mechanism.
 
-- [Install the `survey-vue-ui` npm Package](#install-the-survey-vue-ui-npm-package)
-- [Configure Styles](#configure-styles)
-- [Create a Model](#create-a-model)
-- [Render the Survey](#render-the-survey)
-- [Handle Survey Completion](#handle-survey-completion)
+This step-by-step tutorial will help you get started with the SurveyJS Form Library in a Vue.js application. As a result, you will create a form displayed below:
 
-As a result, you will create a survey displayed below:
-
-<iframe src="https://codesandbox.io/embed/surveyjs-add-a-survey-to-a-vue-application-nn9zm?fontsize=14&hidenavigation=1&module=%2Fsrc%2Fcomponents%2FMyFirstSurvey.vue&theme=dark"
-    style="width:100%; height:500px; border:0; border-radius: 4px; overflow:hidden;"
-    title="SurveyJS - Add a Survey to a Vue Application"
-    sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
+<details>
+  <summary>View Live Example</summary>
+  
+<iframe src="/proxy/github/code-examples/get-started-library/html-css-js/index.html"
+    style="width:100%; border:0; border-radius: 4px; overflow:hidden;"
 ></iframe>
 
-You can find the full code in the following GitHub repository: <a href="https://github.com/surveyjs/code-examples/tree/main/get-started-library/vue" target="_blank">Get Started with SurveyJS - Vue</a>.
+</details>
 
-## Install the `survey-vue-ui` npm Package
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/get-started-library/vue3 (linkStyle))
 
-The SurveyJS Library for Vue consists of two npm packages: [`survey-core`](https://www.npmjs.com/package/survey-core) (platform-independent code) and [`survey-vue-ui`](https://www.npmjs.com/package/survey-vue-ui) (rendering code). Run the following command to install `survey-vue-ui`. The `survey-core` package will be installed automatically because it is listed in `survey-vue-ui` dependencies.
+If you are looking for a quick-start application that includes all SurveyJS components, refer to the following GitHub repositories:
+
+- <a href="https://github.com/surveyjs/surveyjs_vue3_quickstart" target="_blank">SurveyJS + Vue 3</a>
+- <a href="https://github.com/surveyjs/surveyjs-nuxtjs" target="_blank">SurveyJS + Nuxt</a>
+- <a href="https://github.com/surveyjs/surveyjs-vike" target="_blank">SurveyJS + Vike</a>
+- <a href="https://github.com/surveyjs/surveyjs-astro" target="_blank">SurveyJS + Astro</a>
+- <a href="https://github.com/surveyjs/surveyjs-quasar" target="_blank">SurveyJS + Quasar</a>
+
+<a id="add-a-survey-to-a-vue-3-application"></a>
+
+## Install the `survey-vue3-ui` npm Package
+
+SurveyJS Form Library for Vue 3 consists of two npm packages: [`survey-core`](https://www.npmjs.com/package/survey-core) (platform-independent code) and [`survey-vue3-ui`](https://www.npmjs.com/package/survey-vue3-ui) (rendering code). Run the following command to install `survey-vue3-ui`. The `survey-core` package will be installed automatically as a dependency.
 
 ```cmd
-npm install survey-vue-ui --save
+npm install survey-vue3-ui
 ```
 
 ## Configure Styles
 
-SurveyJS ships with the Modern and Default V2 UI themes illustrated below.
+### Add Themes
 
-![Themes in SurveyJS Library](images/survey-library-themes.png)
+SurveyJS Form Library is shipped with several predefined themes illustrated below and a flexible [theme customization mechanism](/documentation/design-tokens-css-customization) based on CSS variables.
 
-Open the Vue component in which your survey will be and import a style sheet that implements the required theme.
+<img src="images/survey-library-themes.png" alt="Themes in SurveyJS Form Library" width="1544" height="820">
 
-```js
+To add SurveyJS themes to your application, open the Vue component that will render your form and import the Form Library style sheet:
+
+```html
+<script setup lang="ts">
+import 'survey-core/survey-core.css';
+</script>
+
 <template>
   <!-- ... -->
 </template>
-
-<script>
-// Modern theme
-import 'survey-core/modern.min.css';
-// Default V2 theme
-// import 'survey-core/defaultV2.min.css';
-</script>
 ```
 
-To apply the imported theme, call the `applyTheme(themeName)` method. Depending on the theme, pass `"modern"` or `"defaultV2"` as the method's argument. For instance, the following code applies the Modern theme:
+This style sheet applies the Default theme. If you want to apply a different predefined theme or create a custom theme, refer to the following help topic for detailed instructions:
 
-```js
-<template>
-  <!-- ... -->
-</template>
+[Themes](/documentation/themes-and-custom-styles (linkStyle))
 
-<script>
-// ...
-import { StylesManager } from 'survey-core';
+### Add Fonts
 
-StylesManager.applyTheme("modern");
-</script>
+Starting with SurveyJS v3.0.4, fonts are no longer included in SurveyJS packages. Load Open Sans separately to preserve the default appearance, unless your application already does so. If you use a custom font, load it instead. Otherwise, the browser uses a fallback font, which may affect spacing and layout.
+
+To add Open Sans using [Fontsource](https://fontsource.org/docs/getting-started/install), run the following command:
+
+```sh
+npm install @fontsource/open-sans
+```
+
+The following example imports font weights 400, 600, and 700. Place the font imports in your application's entry file to load them once for all SurveyJS components.
+
+```ts
+// main.ts
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
 ```
 
 ## Create a Model
 
-A model describes the layout and contents of your survey. The simplest survey model contains one or several questions without layout modifications.
+A model describes the layout and contents of your survey. The simplest form model contains one or several questions without layout modifications.
 
-Models are specified by model definitions (JSON objects). For example, the following model definition declares two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel), each with a [title](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and a [name](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name). Titles are displayed on screen. Names are used to identify the questions in code.
+Models are specified by model schemas (JSON objects). For example, the following model schema declares two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel), each with a [title](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and a [name](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name). Titles are displayed on screen. Names are used to identify the questions in code.
 
 ```js
 const surveyJson = {
@@ -82,43 +100,36 @@ const surveyJson = {
 };
 ```
 
-To instantiate a model, pass the model definition to the [Model](https://surveyjs.io/Documentation/Library?id=surveymodel) constructor as shown in the code below. The model instance will be later used to render the survey. 
+To instantiate a model, pass the model schema to the [Model](https://surveyjs.io/Documentation/Library?id=surveymodel) constructor as shown in the code below. The model instance will be later used to render the survey. 
 
-```js
+```html
+<script setup lang="ts">
+// ...
+import { Model } from 'survey-core';
+
+const surveyJson = { ... };
+const survey = new Model(surveyJson);
+</script>
+
 <template>
   <!-- ... -->
 </template>
-
-<script>
-// ...
-import { ..., Model } from 'survey-core';
-
-export default {
-  data() {
-    const survey = new Model(surveyJson);
-    return {
-      survey
-    }
-  },
-}
-</script>
-
 ```
 
 <details>
-    <summary>View full code</summary>  
+    <summary>View Full Code</summary>  
 
-```js
-<template>
-  <!-- ... -->
-</template>
+```ts
+// main.ts
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
 
-<script>
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
-
-StylesManager.applyTheme("modern");
+```html
+<script setup lang="ts">
+import 'survey-core/survey-core.css';
+import { Model } from 'survey-core';
 
 const surveyJson = {
   elements: [{
@@ -132,68 +143,62 @@ const surveyJson = {
   }]
 };
 
-export default {
-  name: 'MyFirstSurvey',
-  data() {
-    const survey = new Model(surveyJson);
-    return {
-      survey
-    }
-  },
-}
+const survey = new Model(surveyJson);
 </script>
+
+<template>
+  <!-- ... -->
+</template>
 ```
 </details>
 
+<a id="render-the-survey"></a>
 
-## Render the Survey
+## Render the Form
 
-To render a survey, import the `Survey` component, add it to the template, and pass the model instance you created in the previous step to the component's `survey` attribute:
+To render a survey, import `SurveyComponent`, add it to your template, and pass the model instance you created in the previous step to the component's `model` attribute:
+
+```html
+<script setup lang="ts">
+import { SurveyComponent } from 'survey-vue3-ui';
+// ...
+</script>
+
+<template>
+  <SurveyComponent :model="survey" />
+</template>
+```
+
+The code above registers `SurveyComponent` locally. If you want to register it globally, open the `main.ts` file, import `surveyPlugin`, and install it using the `app.use()` method. In this case, you don't need to import `SurveyComponent` within each Vue component where you want to use it.
 
 ```js
-<template>
-  <Survey :survey="survey" />
-</template>
+// main.ts
+import { createApp } from 'vue'
+import { surveyPlugin } from 'survey-vue3-ui'
+import App from './App.vue'
 
-<script>
-// ...
-import { Survey } from 'survey-vue-ui';
-// ...
-const surveyJson = { ... };
-
-export default {
-  components: {
-    Survey
-  },
-  data() {
-    const survey = new Model(surveyJson);
-    return {
-      survey
-    }
-  },
-}
-</script>
+createApp(App).use(surveyPlugin).mount('#app');
 ```
 
 If you replicate the code correctly, you should see the following survey:
 
-![Get Started with SurveyJS - Primitive Survey](images/get-started-primitive-survey.png)
+<img src="images/get-started-primitive-survey.png" alt="Get Started with SurveyJS - Simple Survey" width="772" height="513">
 
 <details>
-    <summary>View full code</summary>  
+    <summary>View Full Code</summary>  
 
-```js
-<template>
-  <Survey :survey="survey" />
-</template>
+```ts
+// main.ts
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
 
-<script>
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
-import { Survey } from 'survey-vue-ui';
-
-StylesManager.applyTheme("modern");
+```html
+<script setup lang="ts">
+import 'survey-core/survey-core.css';
+import { Model } from 'survey-core';
+import { SurveyComponent } from 'survey-vue3-ui';
 
 const surveyJson = {
   elements: [{
@@ -207,120 +212,105 @@ const surveyJson = {
   }]
 };
 
-export default {
-  name: 'MyFirstSurvey',
-  components: {
-    Survey
-  },
-  data() {
-    const survey = new Model(surveyJson);
-    return {
-      survey
-    }
-  },
-}
+const survey = new Model(surveyJson);
 </script>
+
+<template>
+  <SurveyComponent :model="survey" />
+</template>
 ```
 </details>
 
-## Handle Survey Completion
+<a id="handle-survey-completion"></a>
 
-After a respondent completes a survey, the results are available within the [onComplete](https://surveyjs.io/Documentation/Library?id=surveymodel#onComplete) event handler. In real-world applications, you should send the results to a server where they will be stored in a database and processed:
+## Handle Form Completion
 
-```js
-<template>
-  <!-- ... -->
-</template>
+After a respondent completes a survey, the results are available within the [`onComplete`](https://surveyjs.io/Documentation/Library?id=surveymodel#onComplete) event handler. In real-world applications, you should send the results to a server where they will be stored in a database and processed. If your application has a user identification system, you can add the user ID to the survey results before sending them to the server:
 
-<script>
+```html
+<script setup lang="ts">
 // ...
 const SURVEY_ID = 1;
 
-export default {
-  // ...
-  data() {
-    const survey = new Model(surveyJson);
-    survey.onComplete.add(this.surveyComplete);
+const survey = new Model(surveyJson);
+survey.onComplete.add(surveyComplete);
 
-    return {
-      survey
-    }
-  },
-  methods: {
-    surveyComplete (sender) {
-      saveSurveyResults(
-        "https://your-web-service.com/" + SURVEY_ID,
-        sender.data
-      )
-    }
-  },
+const surveyComplete = (survey: any) => {
+  const userId = /* ... Getting the user ID ... */
+  survey.setValue("userId", userId);
+
+  saveSurveyResults(
+    "https://your-web-service.com/" + SURVEY_ID,
+    survey.data
+  )
 }
 
-function saveSurveyResults(url, json) {
-  const request = new XMLHttpRequest();
-  request.open('POST', url);
-  request.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
-  request.addEventListener('load', () => {
-    // Handle "load"
+function saveSurveyResults(url: string | URL, json: object) {
+  fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8'
+    },
+    body: JSON.stringify(json)
+  })
+  .then(response => {
+    if (response.ok) {
+      // Handle success
+    } else {
+      // Handle error
+    }
+  })
+  .catch(error => {
+    // Handle error
   });
-  request.addEventListener('error', () => {
-    // Handle "error"
-  });
-  request.send(JSON.stringify(json));
 }
 </script>
+
+<template>
+  <!-- ... -->
+</template>
 ```
 
 In this tutorial, the results are simply output in an alert dialog:
 
-```js
+```html
+<script setup lang="ts">
+// ...
+const survey = new Model(surveyJson);
+survey.onComplete.add(alertResults);
+
+const alertResults = (sender: any) => {
+  const results = JSON.stringify(sender.data);
+  alert(results);
+}
+</script>
+
 <template>
   <!-- ... -->
 </template>
-
-<script>
-// ...
-export default {
-  // ...
-  data() {
-    const survey = new Model(surveyJson);
-    survey.onComplete.add(this.alertResults);
-
-    return {
-      survey
-    }
-  },
-  methods: {
-    alertResults (sender) {
-      const results = JSON.stringify(sender.data);
-      alert(results);
-    }
-  },
-}
-</script>
 ```
 
-![Get Started with SurveyJS - Survey Results](images/get-started-primitive-survey-alert.png)
+<img src="images/get-started-primitive-survey-alert.png" alt="Get Started with SurveyJS - Survey Results" width="772" height="516">
 
-As you can see, survey results are saved in a JSON object. Its properties correspond to the `name` property values of your questions in the model definition.
+As you can see, form results are saved in a JSON object. Its properties correspond to the `name` property values of your questions in the model schema.
 
-To view the application, run `npm run serve` in a command line and open [http://localhost:8080/](http://localhost:8080/) in your browser.
+To view the application, run `npm run dev` in a command line and open [http://localhost:5173/](http://localhost:5173/) in your browser.
 
 <details>
-    <summary>View full code</summary>  
+    <summary>View Full Code</summary>  
 
-```js
-<template>
-  <Survey :survey="survey" />
-</template>
+```ts
+// main.ts
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
 
-<script>
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
-import { Survey } from 'survey-vue-ui';
-
-StylesManager.applyTheme("modern");
+```html
+<script setup lang="ts">
+import 'survey-core/survey-core.css';
+import { Model } from 'survey-core';
+import { SurveyComponent } from 'survey-vue3-ui';
 
 const surveyJson = {
   elements: [{
@@ -334,31 +324,22 @@ const surveyJson = {
   }]
 };
 
-export default {
-  name: 'MyFirstSurvey',
-  components: {
-    Survey
-  },
-  data() {
-    const survey = new Model(surveyJson);
-    survey.onComplete.add(this.alertResults);
-
-    return {
-      survey
-    }
-  },
-  methods: {
-    alertResults (sender) {
-      const results = JSON.stringify(sender.data);
-      alert(results);
-    }
-  },
+const alertResults = (sender: any) => {
+  const results = JSON.stringify(sender.data);
+  alert(results);
 }
+
+const survey = new Model(surveyJson);
+survey.onComplete.add(alertResults);
 </script>
+
+<template>
+  <SurveyComponent :model="survey" />
+</template>
 ```
 </details>
 
-<a href="https://github.com/surveyjs/code-examples/tree/main/get-started-library/vue" target="_blank">View full code on GitHub</a>
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/get-started-library/vue3 (linkStyle))
 
 ## Further Reading
 

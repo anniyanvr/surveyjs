@@ -1,0 +1,103 @@
+import { Serializer } from "./jsonobject";
+import { singleChoiceKeyboardHints, IKeyboardHintData } from "./keyboard-hints";
+import { QuestionFactory } from "./questionfactory";
+import { ChoiceItem, QuestionCheckboxBase } from "./question_baseselect";
+import { ItemValue } from "./itemvalue";
+/**
+ * A class that describes the Radio Button Group question type.
+ *
+ * [View Demo](https://surveyjs.io/form-library/examples/questiontype-radiogroup/ (linkStyle))
+ */
+export class QuestionRadiogroupModel extends QuestionCheckboxBase {
+  constructor(name: string) {
+    super(name);
+  }
+  protected getDefaultItemComponent(): string {
+    return "survey-radiogroup-item";
+  }
+  public getType(): string {
+    return "radiogroup";
+  }
+  public supportsChoiceKeyboardSelection(): boolean {
+    return true;
+  }
+  supportElementsInChoice(): boolean { return true; }
+  /**
+   * Returns the selected choice item. If no item is selected, returns `null`.
+   */
+  public get selectedItem(): ChoiceItem { return <ChoiceItem>this.getSingleSelectedItem(); }
+  /**
+   * @deprecated Use the [`allowClear`](https://surveyjs.io/form-library/documentation/api-reference/radio-button-question-model#allowClear) property instead.
+   * @hidden
+   */
+  public get showClearButton(): boolean {
+    return this.allowClear;
+  }
+  public set showClearButton(val: boolean) {
+    this.allowClear = val;
+  }
+  public get clearButtonCaption() {
+    return this.getLocalizationString("clearCaption");
+  }
+  supportAutoAdvance(): boolean {
+    return (this.isMouseDown === true || this.isAutoAdvanceRequested === true) && !this.selectedItem?.showCommentArea;
+  }
+  // Arrow keys change the selected value via the native radio group. Auto-advance
+  // waits for Enter so keyboard users can review the choice before leaving the page.
+  public onKeyDown(event: any): void {
+    this.onChoiceKeyDown(event);
+    if (this.canCommitAutoAdvanceOnEnter(event)) {
+      this.commitAutoAdvance(event);
+    }
+  }
+  public supportsKeyboardHints(): boolean {
+    return true;
+  }
+  protected getKeyboardHintsCore(): IKeyboardHintData[] {
+    return singleChoiceKeyboardHints(this);
+  }
+  public getConditionJson(operator: string = null, path: string = null): any {
+    const json = super.getConditionJson(operator, path);
+    delete json["showClearButton"];
+    return json;
+  }
+  protected setNewComment(newValue: string): void {
+    this.isMouseDown = true;
+    super.setNewComment(newValue);
+    this.isMouseDown = false;
+  }
+  public clickItemHandler(item: ItemValue): void {
+    this.selectItem(item);
+  }
+  protected isOtherValueUnused(): boolean {
+    return !this.selectedItem?.showCommentArea;
+  }
+
+  //a11y
+  public get isNewA11yStructure(): boolean {
+    return true;
+  }
+  public get a11y_input_ariaRole(): string {
+    return "radiogroup";
+  }
+  // EO a11y
+}
+
+Serializer.addClass(
+  "radiogroup",
+  [
+    { name: "allowClear:boolean", alternativeName: "showClearButton" },
+    { name: "separateSpecialChoices", visible: true },
+    { name: "itemComponent", visible: false, default: "survey-radiogroup-item" }
+  ],
+  function () {
+    return new QuestionRadiogroupModel("");
+  },
+  "checkboxbase"
+);
+
+QuestionFactory.Instance.registerQuestion("radiogroup", (name) => {
+  var q = new QuestionRadiogroupModel(name);
+  q.choices = QuestionFactory.DefaultChoices;
+  return q;
+});

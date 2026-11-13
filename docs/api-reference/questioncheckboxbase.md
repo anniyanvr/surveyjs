@@ -1,0 +1,43 @@
+---
+title: QuestionCheckboxBase
+product: Form Library
+api-type: class
+description: A base class for multiple-selection question types that can display choice items in multiple columns (Checkbox, Radiogroup, Image Picker).
+source: https://surveyjs.io/form-library/documentation/api-reference/questioncheckboxbase
+---
+
+# `QuestionCheckboxBase`
+
+A base class for multiple-selection question types that can display choice items in multiple columns ([Checkbox](https://surveyjs.io/form-library/documentation/questioncheckboxmodel), [Radiogroup](https://surveyjs.io/form-library/documentation/questionradiogroupmodel), [Image Picker](https://surveyjs.io/form-library/documentation/questionimagepickermodel)).
+
+## Inheritance
+
+[`Base`](https://surveyjs.io/form-library/documentation/api-reference/base.md) &rarr; [`SurveyElementCore`](https://surveyjs.io/form-library/documentation/api-reference/surveyelementcore.md) &rarr; [`SurveyElement`](https://surveyjs.io/form-library/documentation/api-reference/surveyelement.md) &rarr; [`Question`](https://surveyjs.io/form-library/documentation/api-reference/question.md) &rarr; [`QuestionSelectBase`](https://surveyjs.io/form-library/documentation/api-reference/questionselectbase.md) &rarr; `QuestionCheckboxBase`
+
+## Properties
+
+### `choiceShortcutsEnabled`
+
+**Type**: `boolean`
+
+Specifies whether to enable letter shortcuts for selecting choices.
+
+Default value: `undefined` (inherits the survey's [`choiceShortcutsEnabled`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#choiceShortcutsEnabled) setting)
+
+When enabled, choices display letter codes (`A`, `B`, ..., `Z`, `AA`, ...) that respondents can type while the question has focus. In questions that allow multiple selection, shortcuts toggle choice selection.
+
+Letter shortcuts are unavailable on mobile devices and in read-only or preview mode.
+
+[Demo: Letter Shortcuts](https://surveyjs.io/form-library/examples/automatically-move-to-next-page-if-answer-selected/ (linkStyle))
+
+Available since: v3.2.2
+
+### `colCount`
+
+**Type**: `number`
+
+Gets or sets the number of columns used to arrange choice items.
+
+Set this property to 0 if you want to display all items in one line. The default value depends on the available width.
+
+**Related APIs:** [`separateSpecialChoices`](#separateSpecialChoices)

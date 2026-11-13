@@ -1,0 +1,7 @@
+.vscode/
+build/
+example/
+node_modules/
+tests/bundle/
+prompts/
+promts/

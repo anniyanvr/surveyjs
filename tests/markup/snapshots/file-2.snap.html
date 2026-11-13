@@ -1,16 +1,30 @@
-<div class="sd-file sd-file--single">
-	<input aria-invalid="false" aria-label="Question title" aria-required="false" class="sd-visuallyhidden" title="Choose file(s)..." type="file">
-	<div class="sd-file__decorator">
-		<span class="sd-file__drag-area-placeholder">Drop a file here or click the button below to load the file.</span>
-		<div class="sd-file__wrapper">
-			<label aria-label="Choose file" class="sd-file__choose-btn sd-action sd-file__choose-btn--text" role="button">
-				<span>Choose file</span>
-				<svg class="sv-svg-icon" role="img">
-					<use xlink:href="#icon-choosefile">
-					</use>
-				</svg>
-			</label>
-			<span class="sd-description sd-file__no-file-chosen">No file chosen</span>
+<div class="sd-question__header-and-content-container">
+	<div class="sd-element__content sd-question__content" role="presentation">
+		<div class="sd-file sd-file--single">
+			<input aria-invalid="false" aria-label="Question title" aria-required="false" class="sd-visuallyhidden" id="testid0i" tabindex="-1" title="Choose file(s)..." type="file">
+			<div class="sd-file__drag-area">
+				<div class="sd-file__decorator">
+					<span class="sd-file__drag-area-placeholder">
+						<span class="sv-string-viewer sv-string-viewer--multiline">Drag and drop a file here or click the button below to select a file to upload.</span>
+					</span>
+					<div class="sd-file__wrapper">
+						<div class="sd-action-bar sd-action-bar--default-size sd-file__actions-container">
+							<div class="sd-action-bar__item">
+								<div class="sd-action-bar__item-content">
+									<label aria-label="Select File" class="sd-action sd-action--brand sd-action--secondary sd-action--small sd-file__choose-btn" for="testid0i" tabindex="0">
+										<svg class="sd-action__icon sv-svg-icon" role="presentation">
+											<use xlink:href="#icon-folder-24x24" class="">
+											</use>
+											<title class="">Select File</title>
+										</svg>
+										<span class="sd-action__title">Select File</span>
+									</label>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
 		</div>
 	</div>
 </div>

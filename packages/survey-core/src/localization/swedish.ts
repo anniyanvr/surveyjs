@@ -1,0 +1,354 @@
+import { setupLocale } from "survey-core";
+
+export var swedishSurveyStrings = {
+  // "Previous"
+  pagePrevText: "Föregående",
+  // "Next"
+  pageNextText: "Nästa",
+  // [Auto-translated] "First"
+  pageFirstText: "Först",
+  // [Auto-translated] "Last"
+  pageLastText: "Sista",
+  // [Auto-translated] "of {0}"
+  pagerTotalText: "av {0}",
+  // [Auto-translated] "Select Page"
+  pagerSelectPageTitle: "Välj sida",
+  // [Auto-translated] "Sort by {0}"
+  sortByColumnText: "Sortera efter {0}",
+  // [Auto-translated] "High - Low"
+  sortHighLowText: "Högt - Lågt",
+  // [Auto-translated] "Low - High"
+  sortLowHighText: "Låg - Hög",
+  // [Auto-translated] "Alphabet, A - Z"
+  sortAZText: "Alfabetet, A - Ö",
+  // [Auto-translated] "Alphabet, Z - A"
+  sortZAText: "Alfabet, Z - A",
+  // [Auto-translated] "Newest first"
+  sortNewestFirstText: "Nyaste första gången",
+  // [Auto-translated] "Oldest first"
+  sortOldestFirstText: "Äldsta första",
+  // [Auto-translated] "Sorted by {0}"
+  sortOrderText: "Sorterat efter {0}",
+  // [Auto-translated] "{0} ({1})"
+  sortOrderLevelText: "{0} ({1})",
+  // [Auto-translated] "{0}, then by {1}"
+  sortOrderNextText: "{0}, sedan av {1}",
+  // [Auto-translated] "Sort by"
+  sortByText: "Sortera efter",
+  // [Auto-translated] "Default"
+  sortDefaultText: "Standard",
+  // [Auto-translated] "Sort field"
+  sortFieldAriaLabel: "Sorteringsfält",
+  // [Auto-translated] "Sort order"
+  sortDirectionAriaLabel: "Sorteringsordning",
+  // [Auto-translated] "Add sort level"
+  sortAddLevelText: "Lägg till sorteringsnivå",
+  // [Auto-translated] "Remove sort level {0}"
+  sortRemoveLevelText: "Ta bort sorteringsnivå {0}",
+  // [Auto-translated] "Sort field {0}"
+  sortLevelFieldAriaLabel: "Sorteringsfält {0}",
+  // [Auto-translated] "Sort order {0}"
+  sortLevelDirectionAriaLabel: "Sorteringsordning {0}",
+  // [Auto-translated] "Show all sort levels"
+  sortMoreAriaLabel: "Visa alla sorteringsnivåer",
+  // [Auto-translated] "Add New"
+  sortAddNewText: "Lägg till Nytt",
+  // [Auto-translated] "Move sort level {0}"
+  sortMoveLevelAriaLabel: "Flytta sorteringsnivå {0}",
+  // "Complete"
+  completeText: "Slutför",
+  // "Preview"
+  previewText: "Förhandsvisning",
+  // "Edit"
+  editText: "Redigera",
+  // "Start"
+  startSurveyText: "Börja",
+  // [Auto-translated] "Please leave a comment"
+  commentText: "Lämna gärna en kommentar",
+  // "Other (describe)"
+  otherItemText: "Annat (beskriv)",
+  // "None"
+  noneItemText: "Ingen",
+  // [Auto-translated] "Refuse to answer"
+  refuseItemText: "Vägra svara",
+  // [Auto-translated] "Don't know"
+  dontKnowItemText: "Vet inte",
+  // "Select All"
+  selectAllItemText: "Välj alla",
+  // [Auto-translated] "Deselect all"
+  deselectAllItemText: "Avmarkera alla",
+  // "Page {0} of {1}"
+  progressText: "Sida {0} av {1}",
+  // "{0} of {1}"
+  indexText: "{0} av {1}",
+  // "{0} of {1}"
+  panelDynamicProgressText: "{0} av {1}",
+  // [Auto-translated] "Panel {panelIndex}"
+  panelDynamicTabTextFormat: "Panel {panelIndex}",
+  // "Answered {0}/{1} questions"
+  questionsProgressText: "{0} / {1} frågor besvarade",
+  // [Auto-translated] "Question {0} of {1}"
+  questionPositionProgressText: "Fråga {0} {1}",
+  // "The survey doesn't contain any visible elements."
+  emptySurvey: "Det finns ingen synlig sida eller fråga i enkäten.",
+  // "Thank you for completing the survey"
+  completingSurvey: "Tack för att du genomfört enkäten!!",
+  // "You have already completed this survey."
+  completingSurveyBefore: "Våra register visar att du redan har slutfört denna undersökning.",
+  // "Loading Survey..."
+  loadingSurvey: "Enkäten laddas...",
+  // "Select..."
+  placeholder: "Välj...",
+  // "Select..."
+  ratingOptionsCaption: "Tryck här för att betygsätta...",
+  // [Auto-translated] "Select..."
+  buttongroupOptionsCaption: "Utvald...",
+  // "value"
+  value: "värde",
+  // "Response required."
+  requiredError: "Frågan är obligatorisk.",
+  // [Auto-translated] "You must select Yes to continue."
+  requireTrueError: "Du måste välja Ja för att fortsätta.",
+  // [Auto-translated] "The value is incorrect."
+  incorrectValueError: "Värdet är felaktigt.",
+  // [Auto-translated] "The value contains unknown keys: {0}."
+  incorrectValueUnknownKeysError: "Värdet innehåller okända nycklar: {0}.",
+  // "Response required: answer at least one question."
+  requiredErrorInPanel: "Vänligen svara på minst en fråga.",
+  // "Response required: answer questions in all rows."
+  requiredInAllRowsError: "Var vänlig besvara frågorna på alla rader.",
+  // [Auto-translated] "Each row must have a unique value."
+  eachRowUniqueError: "Varje rad måste ha ett unikt värde.",
+  // "The value should be numeric."
+  numericError: "Värdet ska vara numeriskt.",
+  // "The value should not be less than {0}"
+  minError: "Värdet får inte vara mindre än {0}",
+  // [Auto-translated] "Please enter a value that matches the step size of {0}."
+  stepError: "Ange ett värde som matchar stegstorleken för {0}.",
+  // "The value should not be greater than {0}"
+  maxError: "Värdet får inte vara större än {0}",
+  // [Auto-translated] "Invalid input"
+  invalidInputError: "Ogiltig indata",
+  // [Auto-translated] "Numbers are not allowed."
+  textNoDigitsAllow: "Nummer är inte tillåtna.",
+  // [Auto-translated] "Please complete the value to match the required format."
+  incompletePatternError: "Vänligen fyll i värdet för att matcha det önskade formatet.",
+  // "Please enter at least {0} character(s)."
+  textMinLength: "Ange minst {0} tecken.",
+  // "Please enter no more than {0} character(s)."
+  textMaxLength: "Ange färre än {0} tecken.",
+  // "Please enter at least {0} and no more than {1} characters."
+  textMinMaxLength: "Ange mer än {0} och färre än {1} tecken.",
+  // "Please fill in at least {0} row(s)."
+  minRowCountError: "Var vänlig fyll i minst {0} rader.",
+  // "Please select at least {0} option(s)."
+  minSelectError: "Var vänlig välj åtminstone {0} varianter.",
+  // "Please select no more than {0} option(s)."
+  maxSelectError: "Var vänlig välj inte fler än {0} varianter.",
+  // "The '{0}' should be at least {1} and at most {2}"
+  numericMinMax: "'{0}' ska vara lika med eller mer än {1} samt lika med eller mindre än {2}",
+  // "The '{0}' should be at least {1}"
+  numericMin: "'{0}' ska vara lika med eller mer än {1}",
+  // "The '{0}' should be at most {1}"
+  numericMax: "'{0}' ska vara lika med eller mindre än {1}",
+  // "Please enter a valid e-mail address."
+  invalidEmail: "Var vänlig ange en korrekt e-postadress.",
+  // "The expression: {0} should return 'true'."
+  invalidExpression: "Uttrycket: {0} ska returnera 'true'.",
+  // "The request returned error '{0}'. {1}"
+  urlRequestError: "Förfrågan returnerade felet '{0}'. {1}",
+  // "The request returned empty data or the 'path' property is incorrect"
+  urlGetChoicesError: "Antingen returnerade förfrågan ingen data eller så är egenskapen 'path' inte korrekt",
+  // "The file size should not exceed {0}."
+  exceedMaxSize: "Filstorleken får ej överstiga {0}.",
+  // [Auto-translated] "Bytes, KB, MB, GB, TB"
+  fileSizeUnits: "Bytes, KB, MB, GB, TB",
+  // [Auto-translated] "The maximum number of files you can upload is {0}."
+  exceedMaxFiles: "Det maximala antalet filer du kan ladda upp är {0}.",
+  // [Auto-translated] "Files cannot be uploaded. Please add a handler for the 'onUploadFiles' event."
+  noUploadFilesHandler: "Filer kan inte laddas upp. Lägg till en hanterare för händelsen 'onUploadFiles'.",
+  // "Response required: enter another value."
+  otherRequiredError: "Var vänlig ange det andra värdet.",
+  // [Auto-translated] "The value '{0}' is not one of the available choices."
+  variableValueNotInChoices: "Värdet '{0}' är inte ett av de tillgängliga valen.",
+  // "Your file is uploading. Please wait several seconds and try again."
+  uploadingFile: "Din fil laddas upp. Var vänlig vänta några sekunder och försök sedan igen.",
+  // "Loading..."
+  loadingFile: "Laddar...",
+  // "Choose file(s)..."
+  chooseFile: "Välj fil(er) ...",
+  // "No file selected"
+  noFileChosen: "Ingen fil vald",
+  // [Auto-translated] "Drag and drop a file here or click the button below to select a file to upload."
+  filePlaceholder: "Dra och släpp en fil här eller klicka på knappen nedan för att välja en fil att ladda upp.",
+  // "Are you sure you want to delete this record?"
+  confirmDelete: "Vill du radera posten?",
+  // "This value should be unique."
+  keyDuplicationError: "Detta värde ska vara unikt.",
+  // "Add Column"
+  addColumn: "Lägg till kolumn",
+  // "Add Row"
+  addRow: "Lägg till rad",
+  // "Remove"
+  removeRow: "Ta bort",
+  // [Auto-translated] "Move row {0}"
+  moveRowAriaLabel: "Flytta rad {0}",
+  // [Auto-translated] "There are no rows."
+  noRowsText: "Det finns inga rader.",
+  // [Auto-translated] "Row {rowIndex}"
+  rowIndexTemplateTitle: "Rad {rowIndex}",
+  // [Auto-translated] "{rowTitle}"
+  rowNameTemplateTitle: "{rowTitle}",
+  // "Add new"
+  addPanel: "Lägg till ny",
+  // "Remove"
+  removePanel: "Ta bort",
+  // [Auto-translated] "Show Details"
+  showDetails: "Detaljer",
+  // [Auto-translated] "Hide Details"
+  hideDetails: "Göm detaljer",
+  // "item"
+  choices_Item: "Artikel",
+  // [Auto-translated] "Choice option"
+  choices_Choice: "Alternativ för valmöjligheter",
+  // "Column"
+  matrix_column: "Kolumn",
+  // "Row"
+  matrix_row: "Rad",
+  // [Auto-translated] "text"
+  multipletext_itemname: "Text",
+  // "The results are being saved on the server..."
+  savingData: "Resultaten sparas på servern ...",
+  // "An error occurred and we could not save the results."
+  savingDataError: "Ett fel inträffade och vi kunde inte spara resultaten.",
+  // "The results were saved successfully!"
+  savingDataSuccess: "Resultaten lyckades sparas!",
+  // "Try again"
+  saveAgainButton: "Försök igen",
+  // [Auto-translated] "min"
+  timerMin: "Min",
+  // "sec"
+  timerSec: "sek",
+  // "You have spent {0} on this page and {1} in total."
+  timerSpentAll: "Du har spenderat {0} på den här sidan och {1} totalt.",
+  // "You have spent {0} on this page."
+  timerSpentPage: "Du har spenderat {0} på den här sidan.",
+  // "You have spent {0} in total."
+  timerSpentSurvey: "Du har spenderat {0} totalt.",
+  // "You have spent {0} of {1} on this page and {2} of {3} in total."
+  timerLimitAll: "Du har spenderat {0} av {1} på den här sidan och {2} av {3} totalt.",
+  // "You have spent {0} of {1} on this page."
+  timerLimitPage: "Du har spenderat {0} av {1} på den här sidan.",
+  // "You have spent {0} of {1} in total."
+  timerLimitSurvey: "Du har spenderat {0} av {1} totalt.",
+  // "Clear"
+  clearCaption: "Klar",
+  // [Auto-translated] "Select"
+  selectCaption: "Utvald",
+  // "Sign here"
+  signaturePlaceHolder: "Signera här",
+  // [Auto-translated] "No signature"
+  signaturePlaceHolderReadOnly: "Ingen signatur",
+  // "Select File"
+  chooseFileCaption: "Välj fil",
+  // [Auto-translated] "Take Photo"
+  takePhotoCaption: "Ta foto",
+  // [Auto-translated] "Click the button below to take a photo using the camera."
+  photoPlaceholder: "Klicka på knappen nedan för att ta ett foto med kameran.",
+  // [Auto-translated] "Drag and drop or select a file to upload or take a photo using the camera."
+  fileOrPhotoPlaceholder: "Dra och släpp eller välj en fil att ladda upp eller ta ett foto med kameran.",
+  // [Auto-translated] "Replace file"
+  replaceFileCaption: "Ersätt fil",
+  // "Remove this file"
+  removeFileCaption: "Ta bort den här filen",
+  // "Yes"
+  booleanCheckedLabel: "Ja",
+  // "No"
+  booleanUncheckedLabel: "Nej",
+  // "Are you sure that you want to remove this file: {0}?"
+  confirmRemoveFile: "Är du säker på att du vill ta bort den här filen: {0}?",
+  // "Are you sure that you want to remove all files?"
+  confirmRemoveAllFiles: "Är du säker på att du vill ta bort alla filer?",
+  // "Question Title"
+  questionTitlePatternText: "Frågetitel",
+  // "Cancel"
+  modalCancelButtonText: "Avbryt",
+  // "Apply"
+  modalApplyButtonText: "Spara",
+  // "Type to search..."
+  filterStringPlaceholder: "Skriv för att söka...",
+  // "No data to display"
+  emptyMessage: "Ingen data finns",
+  // [Auto-translated] "Loading..."
+  loadingPage: "Lastning...",
+  // [Auto-translated] "Loading..."
+  loadingData: "Lastning...",
+  // "No entries yet.\nClick the button below to add a new entry."
+  noEntriesText: "Det finns inga värden än.\nKlicka på knappen nedan för att lägga till nytt värde.",
+  // [Auto-translated] "No entries"
+  noEntriesReadonlyText: "Inga anmälningar",
+  // [Auto-translated] "New Panel"
+  tabTitlePlaceholder: "Ny panel",
+  // "More"
+  more: "Mer",
+  // [Auto-translated] "OK"
+  tagboxDoneButtonCaption: "OKEJ",
+  // [Auto-translated] "All choices are selected for ranking"
+  selectToRankEmptyRankedAreaText: "Alla val väljs ut för rankning",
+  // [Auto-translated] "Drag choices here to rank them"
+  selectToRankEmptyUnrankedAreaText: "Dra valen hit för att rangordna dem",
+  // [Auto-translated] "OK"
+  ok: "OKEJ",
+  // [Auto-translated] "Cancel"
+  cancel: "Annullera",
+  // "Create \"{0}\" item..."
+  createCustomItem: "Skapa \"{0}\"-objekt...",
+  // [Auto-translated] "Table of contents"
+  toc: "Innehållsförteckning",
+  // [Auto-translated] "Progress bar"
+  progressbar: "Förloppsindikator",
+  // [Auto-translated] "Page {0}"
+  progressbarPage: "Sida {0}",
+  // "d" - a day placeholder symbol in a datetime input mask
+  maskPlaceholderDay: "d",
+  // "m" - a month placeholder symbol in a datetime input mask
+  maskPlaceholderMonth: "m",
+  // "y" - a year placeholder symbol in a datetime input mask
+  maskPlaceholderYear: "å",
+  // "h" - a 12-hour placeholder symbol in a datetime input mask
+  maskPlaceholderHour12: "t",
+  // "H" - a 24-hour placeholder symbol in a datetime input mask
+  maskPlaceholderHour24: "T",
+  // "M" - a minute placeholder symbol in a datetime input mask
+  maskPlaceholderMinute: "M",
+  // "s" - a second placeholder symbol in a datetime input mask
+  maskPlaceholderSecond: "s",
+  // "t" - a lowercase AM/PM marker placeholder symbol in a datetime input mask
+  maskPlaceholderTimeMarkerLower: "f",
+  // "T" - an uppercase AM/PM marker placeholder symbol in a datetime input mask
+  maskPlaceholderTimeMarkerUpper: "F",
+  // [Auto-translated] "to select"
+  keyboardHintSelectText: "att välja",
+  // [Auto-translated] "to toggle"
+  keyboardHintToggleText: "att växla",
+  // [Auto-translated] "to navigate"
+  keyboardHintNavigateText: "Att navigera",
+  // [Auto-translated] "to continue"
+  keyboardHintContinueText: "Att fortsätta",
+  // [Auto-translated] "to submit"
+  keyboardHintSubmitText: "att underkasta sig",
+  // [Auto-translated] "or"
+  keyboardHintOrText: "eller",
+  // [Auto-translated] "for a new line"
+  keyboardHintNewLineText: "för en ny linje",
+  // [Auto-translated] "to next option"
+  keyboardHintNextItemText: "Till nästa alternativ",
+  // [Auto-translated] "to move"
+  keyboardHintMoveText: "att flytta",
+  // [Auto-translated] "to open"
+  keyboardHintOpenText: "att öppna",
+  // [Auto-translated] "to close"
+  keyboardHintCloseText: "För att stänga"
+};
+
+setupLocale({ localeCode: "sv", strings: swedishSurveyStrings, nativeName: "svenska", englishName: "Swedish" });

@@ -1,0 +1,87 @@
+<template>
+  <div
+    v-if="element.renderedIsContentVisible"
+    :class="element.getContainerCss()"
+    :id="element.renderedId"
+    @focusin="element.focusIn()"
+    @click="(event) => element.clickRootFunction && element.clickRootFunction(event)"
+    ref="root"
+  >
+    <SvComponent
+      :is="'survey-errors'"
+      :element="element"
+      v-if="element.showErrorsAbovePanel"
+    />
+    <SvComponent
+      :is="'survey-element-header'"
+      v-if="element.hasTitle || element.hasDescription"
+      :element="element"
+      :css="css"
+    ></SvComponent>
+    <SvComponent
+      :is="'survey-errors'"
+      :element="element"
+      v-if="!element.showErrorsAbovePanel"
+    />
+    <div :class="element.cssClasses.panel.expandableContent" v-if="element.renderedIsExpanded">
+      <div :id="element.contentId" :style="panelContentStyle" :class="element.cssClasses.panel.content"
+        :role="element.ariaRole" :aria-labelledby="element.ariaLabelledBy" :aria-label="element.ariaLabel">
+        <template v-for="row in element.visibleRows" :key="row.id">
+          <SvComponent :is="(element.getSurvey() as SurveyModel).getRowWrapperComponentName(row)" v-bind="{
+            componentData: (element.getSurvey() as SurveyModel).getRowWrapperComponentData(row),
+          }">
+            <SvComponent :is="'survey-row'" :row="row" :survey="survey" :css="css">
+            </SvComponent>
+          </SvComponent>
+        </template>
+      </div>
+      <SvComponent :is="'sv-action-bar'" v-if="element.renderedIsExpanded && element.getFooterToolbar().hasActions"
+        :model="element.getFooterToolbar()"></SvComponent>
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+export default {
+  inheritAttrs: false,
+};
+</script>
+<script lang="ts" setup>
+import SvComponent from "@/SvComponent.vue";
+import type { PanelModel, SurveyModel } from "survey-core";
+import { ref, computed, onMounted } from "vue";
+import { useBase } from "./base";
+defineOptions({
+  inheritAttrs: false,
+});
+const props = defineProps<{
+  element: PanelModel;
+  isEditMode?: boolean;
+  css?: any;
+}>();
+const root = ref<HTMLElement>(null as any);
+const survey = computed(() => props.element.survey);
+const panelPaddingHorizontal = "var(--sd-base-padding, var(--sjs2-spacing-x500))";
+const panelContentStyle = computed(() => {
+  const innerPaddingLeft = props.element.innerPaddingLeft;
+  return innerPaddingLeft
+    ? {
+        paddingInlineStart: `calc(${panelPaddingHorizontal} + ${innerPaddingLeft})`,
+      }
+    : {};
+});
+
+useBase(() => props.element, (newValue) => {
+  if(root.value) {
+    newValue.afterRender(root.value);
+  }
+}, (panel) => {
+  panel.beforeDestroy();
+});
+
+onMounted(() => {
+  if(root.value) {
+    props.element.afterRender(root.value);
+  }
+});
+</script>

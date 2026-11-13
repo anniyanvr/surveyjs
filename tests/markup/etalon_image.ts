@@ -4,7 +4,7 @@ registerMarkupTest(
   {
     name: "Test Image question markup",
     json: {
-      questions: [
+      elements: [
         {
           "type": "image",
           "name": "banner",
@@ -14,14 +14,31 @@ registerMarkupTest(
         }
       ]
     },
+    initSurvey: survey => {
+      survey.getAllQuestions()[0]["onErrorHandler"] = function() { this["contentNotLoaded"] = false; };
+    },
     snapshot: "image"
+  }
+);
+registerMarkupTest(
+  {
+    name: "Test Image question empty",
+    json: {
+      elements: [
+        {
+          "type": "image",
+          "name": "banner",
+        }
+      ]
+    },
+    snapshot: "image-empty"
   }
 );
 registerMarkupTest(
   {
     name: "Test Image Video question markup",
     json: {
-      questions: [
+      elements: [
         {
           "type": "image",
           "name": "banner",
@@ -32,6 +49,50 @@ registerMarkupTest(
         }
       ]
     },
+    initSurvey: survey => {
+      survey.getAllQuestions()[0]["onErrorHandler"] = function() { this["contentNotLoaded"] = false; };
+    },
     snapshot: "image-video",
+  }
+);
+registerMarkupTest(
+  {
+    name: "Test Image question doesn't load content",
+    json: {
+      elements: [
+        {
+          "type": "image",
+          "name": "banner",
+          "imageLink": "#item1.jpg",
+        }
+      ]
+    },
+    timeout: 500,
+    initSurvey: survey => {
+      survey.getAllQuestions()[0]["contentNotLoaded"] = true;
+      survey.getAllQuestions()[0]["onErrorHandler"] = function() { this["contentNotLoaded"] = true; };
+    },
+    snapshot: "image-not-load-content"
+  }
+);
+
+registerMarkupTest(
+  {
+    name: "Test Image question markup with iframe",
+    json: {
+      elements: [
+        {
+          "type": "image",
+          "imageLink": "testurl",
+          "imageHeight": 450,
+          "imageWidth": 800
+        }
+      ]
+    },
+    initSurvey: survey => {
+      const question = survey.getAllQuestions()[0];
+      question.setPropertyValue("renderedMode", "youtube");
+    },
+    snapshot: "image-youtube"
   }
 );

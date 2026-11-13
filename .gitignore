@@ -3,6 +3,7 @@
 node_modules
 build
 src/**/*.js
+!src/localization/translation*.js
 doc_generator/**/*.json
 docs/classes.json
 docs/pmes.json
@@ -10,7 +11,7 @@ tmp
 *.map
 .tsdrc
 .idea
-/packages/**/*
+.angular
 /.gitattributes
 project.json
 /lib_typings
@@ -35,8 +36,35 @@ package-lock.json
 
 svgbundle.html
 
-coverage/**/*
+coverage/
 
 /.angular/cache
 visualRegressionTests/screenshots
 visualRegressionTests/artifacts
+packages/survey-angular-ui/src/**/*.js
+dist
+junit.xml
+**/test-results/
+**/playwright-report/
+/blob-report/
+/playwright/.cache/
+playwright-report/*
+test-results/*
+tests/bundle/*
+packages/survey-core/tests/bundle/*
+packages/survey-react-ui/tests/bundle/*
+packages/survey-react-ui/tests/shards/
+packages/survey-vue3-ui/tests/shards/
+packages/survey-js-ui/tests/shards/
+packages/survey-react-ui/tests/.snapshot-updates.*.log
+packages/survey-js-ui/tests/bundle/*
+packages/survey-core/test_output.txt
+.claude/
+packages/survey-core/prompts/
+packages/survey-core/promts/
+packages/converter/promts/
+packages/survey-core/docs/
+perf/results/
+perf/react19/node_modules/
+perf/vue3/node_modules/
+perf/angular/node_modules/

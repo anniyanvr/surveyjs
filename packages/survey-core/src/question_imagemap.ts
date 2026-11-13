@@ -1,0 +1,826 @@
+import { DomDocumentHelper, DomWindowHelper } from "./global_variables_utils";
+import { ItemValue } from "./itemvalue";
+import { Serializer } from "./jsonobject";
+import { property } from "./decorators";
+import { Question, QuestionValueType, IVerifyDataContext } from "./question";
+import { PropertyNameArray } from "../src/propertyNameArray";
+import { SurveyError } from "./survey-error";
+import { CustomError } from "./error";
+import { settings } from "./settings";
+import { Base } from "./base";
+import { IQuestion } from "./base-interfaces";
+import { getIdSelector } from "./utils/dom-utils";
+
+/* The fields an image map keeps in the object of a selected area: the area value under
+   valuePropertyName while it selects several areas - a single selection stays a plain value.
+   Exported so that a tool reading the JSON (survey-core/linter) finds the very fields the question
+   writes. */
+export function getImageMapItemFields(multiSelect: boolean, valuePropertyName: string): Array<string> {
+  return multiSelect && !!valuePropertyName ? [valuePropertyName] : [];
+}
+
+function createSVGElement(name: string): SVGElement {
+  const document = DomDocumentHelper.getDocument();
+  if (!document) return null;
+  return document.createElementNS("http://www.w3.org/2000/svg", name);
+}
+
+interface IImageMapColors {
+  idleFillColor: string;
+  idleStrokeColor: string;
+  idleStrokeWidth: number;
+  hoverFillColor: string;
+  hoverStrokeColor: string;
+  hoverStrokeWidth: number;
+  selectedFillColor: string;
+  selectedStrokeColor: string;
+  selectedStrokeWidth: number;
+}
+
+function buildImageMapCssVariables(colors: IImageMapColors): { [index: string]: string } {
+  const variables: { [index: string]: any } = {
+    "--sd-imagemap-idle-fill-color": colors.idleFillColor,
+    "--sd-imagemap-idle-stroke-color": colors.idleStrokeColor,
+    "--sd-imagemap-idle-stroke-width": colors.idleStrokeWidth,
+    "--sd-imagemap-hover-fill-color": colors.hoverFillColor,
+    "--sd-imagemap-hover-stroke-color": colors.hoverStrokeColor,
+    "--sd-imagemap-hover-stroke-width": colors.hoverStrokeWidth,
+    "--sd-imagemap-selected-fill-color": colors.selectedFillColor,
+    "--sd-imagemap-selected-stroke-color": colors.selectedStrokeColor,
+    "--sd-imagemap-selected-stroke-width": colors.selectedStrokeWidth,
+  };
+
+  const result: { [index: string]: string } = {};
+  Object.keys(variables).forEach((key) => {
+    if (variables[key] !== undefined && variables[key] !== null) {
+      result[key] = "" + variables[key];
+    }
+  });
+  return result;
+}
+
+// Applied through CSSOM rather than setAttribute("style", ...): a style attribute is
+// refused under a strict `style-src` CSP unless 'unsafe-hashes' is allowed.
+function applyImageMapCssVariables(svg: SVGElement, variables: { [index: string]: string }): void {
+  const style = (<any>svg).style as CSSStyleDeclaration;
+  if (!style) return;
+  svg.removeAttribute("style");
+  Object.keys(variables).forEach((key) => style.setProperty(key, variables[key]));
+}
+
+export class QuestionImageMapModel extends Question {
+
+  constructor(name: string) {
+    super(name);
+    this.createItemValues("areas");
+  }
+
+  bg: HTMLImageElement;
+  svg: SVGElement;
+
+  @property() imageLink: string;
+  @property() areas: ImageMapArea[];
+  @property() hoveredUID: string;
+  @property() valuePropertyName: string;
+
+  @property({ defaultValue: true }) multiSelect: boolean;
+  public get isMultiSelect(): boolean {
+    return this.isDesignMode ? false : this.multiSelect;
+  }
+  @property({ onSetting: (val: number) => val < 0 ? 0 : val }) maxSelectedAreas: number;
+  @property({ onSetting: (val: number) => val < 0 ? 0 : val }) minSelectedAreas: number;
+
+  @property() shape: string;
+
+  @property() idleStrokeColor: string;
+  @property() idleStrokeWidth: number;
+  @property() idleFillColor: string;
+
+  @property() hoverStrokeColor: string;
+  @property() hoverStrokeWidth: number;
+  @property() hoverFillColor: string;
+
+  @property() selectedStrokeColor: string;
+  @property() selectedStrokeWidth: number;
+  @property() selectedFillColor: string;
+
+  @property() selectedArea: ImageMapArea | undefined;
+
+  public getType(): string {
+    return "imagemap";
+  }
+  protected get supportsQuestionView(): boolean {
+    return false;
+  }
+  // A respondent answers by clicking a region of an image, so there is nothing a consumer that
+  // renders nothing can send back.
+  public get hasPlainInput(): boolean {
+    return false;
+  }
+  public getValueType(): QuestionValueType {
+    return this.multiSelect ? "array" : "string";
+  }
+
+  protected getAllChildren(): Base[] {
+    return [
+      ...super.getAllChildren(),
+      ...this.areas
+    ];
+  }
+
+  protected onValueChanged() {
+    super.onValueChanged();
+    this.renderSVG();
+  }
+
+  public localeChanged() {
+    super.localeChanged();
+    this.renderSVG();
+  }
+
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+
+    if (name === "isSelectedInDesigner" && newValue === false) {
+      this.selectedArea = undefined;
+    }
+    if (name === "multiSelect")this.clearValue();
+
+    if ([
+      "idleStrokeColor", "idleStrokeWidth", "idleFillColor",
+      "hoverStrokeColor", "hoverStrokeWidth", "hoverFillColor",
+      "selectedStrokeColor", "selectedStrokeWidth", "selectedFillColor"
+    ].indexOf(name) > -1)this.updateCSSVariables();
+
+    if (this.isInDesignMode && name === "areas" && !this.areas.length) { this.selectedArea = undefined; }
+    if (["areas", "shape", "selectedArea", "hoveredUID"].indexOf(name) > -1)this.renderSVG();
+  }
+
+  protected getValueCore() {
+    var value = super.getValueCore();
+    if (!this.isMultiSelect && Array.isArray(value) && value.length === 0) {
+      return undefined;
+    }
+    return value;
+  }
+
+  protected runConditionCore(properties: any): void {
+    super.runConditionCore(properties);
+
+    ItemValue.runEnabledConditionsForItems(this.areas, undefined, properties);
+    let isChanged = ItemValue.runConditionsForItems(this.areas, undefined, undefined, properties, true);
+
+    if (isChanged) {
+      const clearIf = this.getClearIfInvisible();
+      if (clearIf == "onHidden" || clearIf == "onHiddenContainer") { this.clearIncorrectValues(); }
+      this.renderSVG();
+    }
+  }
+
+  protected clearValueIfInvisibleCore(reason: string): void {
+    super.clearValueIfInvisibleCore(reason);
+    this.clearIncorrectValues();
+  }
+
+  protected verifyValueCore(val: any, context: IVerifyDataContext): boolean {
+    if (!super.verifyValueCore(val, context)) return false;
+    if (context.checks.reportInvalidValueTypes && Array.isArray(val) !== this.isMultiSelect) {
+      context.addIssue("invalidValueType", undefined, val, this);
+      return false;
+    }
+    if (!context.checks.reportInvalidChoiceValues) return true;
+    const values = Array.isArray(val) ? val : [val];
+    values.forEach((v: any, index: number) => {
+      if (!!this.areas.find(i => i.value === this.getItemAreaValue(v))) return;
+      context.addIssue("invalidChoiceValue", Array.isArray(val) ? index : undefined, v, this);
+    });
+    return true;
+  }
+  protected clearIncorrectValuesCore(): void {
+    if (Array.isArray(this.value) !== this.isMultiSelect) {
+      this.clearValue(true);
+    }
+  }
+  public clearIncorrectValues(): void {
+    super.clearIncorrectValues();
+    this.runDeletingEmptyValues((): void => this.clearInvisibleAreaValues());
+  }
+  private clearInvisibleAreaValues(): void {
+    if (!this.value) return;
+    if (this.isMultiSelect) {
+      this.value = this.value.filter((val: any) => {
+        const item = this.areas.find(i => i.value === this.getItemAreaValue(val));
+        return !!item && item.isVisible;
+      });
+    } else {
+      let found = this.areas.find(i => i.value === this.value);
+      if (!found || !found.isVisible) {
+        this.value = undefined;
+      }
+    }
+  }
+
+  public afterRenderQuestionElement(el: HTMLElement) {
+    if (DomWindowHelper.isAvailable()) {
+      if (!!el) {
+        this.initImageMap(el);
+      }
+    }
+    super.afterRenderQuestionElement(el);
+  }
+
+  public beforeDestroyQuestionElement(el: HTMLElement) {
+    super.beforeDestroyQuestionElement(el);
+
+    if (this.bg) {
+      this.bg.removeEventListener("load", this.onBgImageLoaded);
+    }
+
+    if (this.svg) {
+      this.svg.removeEventListener("click", this.onClickHandler);
+      this.svg.removeEventListener("mouseover", this.onMouseOverHandler);
+      this.svg.removeEventListener("mouseout", this.onMouseOutHandler);
+      this.svg.removeEventListener("mousedown", this.onMouseDownHandler);
+      this.svg.removeEventListener("mouseup", this.onMouseUpHandler);
+      this.svg.removeEventListener("mousemove", this.onMouseMoveHandler);
+    }
+  }
+
+  onBgImageLoaded = () => {
+    if (!this.svg || !this.bg) return;
+    this.svg.setAttribute("viewBox", `0 0 ${ this.bg.naturalWidth } ${ this.bg.naturalHeight }`);
+    this.renderSVG();
+  };
+
+  onClickHandler = (event: MouseEvent) => {
+    if (this.isInDesignMode && this.selectedArea) {
+      const idx = (event.target as HTMLElement).dataset["idx"];
+      if (idx) {
+        this.selectedArea.removeCoord(Number(idx));
+      } else {
+        const [x, y] = this.scaleCoordsToSVG([event.offsetX, event.offsetY]);
+        this.selectedArea.addCoord(x, y);
+      }
+      this.drawAreaControls();
+      return;
+    }
+    const uid = (event.target as HTMLElement).dataset["uid"];
+    if (!uid) return;
+    const item = this.areas.find(i => i.renderedId === uid);
+    this.mapItemToggle(item);
+  };
+
+  onMouseOverHandler = (event: MouseEvent) => {
+    if (this.isInDesignMode && this.selectedArea) return;
+    const uid = (event.target as HTMLElement).dataset["uid"];
+    if (!uid) return;
+    this.hoveredUID = uid;
+  };
+
+  onMouseOutHandler = () => {
+    this.hoveredUID = null;
+  };
+
+  onMouseDownHandler = (event: MouseEvent) => {
+    if ((event.target as HTMLElement).dataset["idx"] !== undefined) {
+      this.activeControlPoint = event.target as SVGElement;
+    }
+  };
+
+  onMouseUpHandler = () => {
+    this.activeControlPoint = null;
+  };
+
+  onMouseMoveHandler = (event: MouseEvent) => {
+    if (!this.activeControlPoint) return;
+
+    const [x, y] = this.scaleCoordsToSVG([event.offsetX, event.offsetY]);
+
+    const idx = Number(this.activeControlPoint.dataset["idx"]);
+    const item = this.selectedArea;
+
+    item.setCoord(idx, x, y);
+  };
+
+  public initImageMap(el: HTMLElement): void {
+
+    if (!el) return;
+
+    this.bg = el.querySelector(getIdSelector(this.renderedId + "-bg")) as HTMLImageElement;
+    this.svg = el.querySelector(getIdSelector(this.renderedId + "-svg")) as SVGElement;
+
+    this.bg.addEventListener("load", this.onBgImageLoaded);
+
+    this.svg.removeEventListener("click", this.onClickHandler);
+    this.svg.addEventListener("click", this.onClickHandler);
+
+    this.svg.removeEventListener("mouseover", this.onMouseOverHandler);
+    this.svg.addEventListener("mouseover", this.onMouseOverHandler);
+
+    this.svg.removeEventListener("mouseout", this.onMouseOutHandler);
+    this.svg.addEventListener("mouseout", this.onMouseOutHandler);
+
+    this.svg.removeEventListener("mousedown", this.onMouseDownHandler);
+    this.svg.addEventListener("mousedown", this.onMouseDownHandler);
+
+    this.svg.removeEventListener("mouseup", this.onMouseUpHandler);
+    this.svg.addEventListener("mouseup", this.onMouseUpHandler);
+
+    this.svg.removeEventListener("mousemove", this.onMouseMoveHandler);
+    this.svg.addEventListener("mousemove", this.onMouseMoveHandler);
+
+    this.updateCSSVariables();
+  }
+
+  public scaleCoordsToSVG([x, y]): [number, number] {
+    if (!this.svg || !this.bg) return [x, y];
+    const scale = (this.svg as SVGGraphicsElement).getScreenCTM().a;
+    return [x / scale, y / scale];
+  }
+
+  public getCSSVariablesMap(): { [index: string]: string } {
+    return buildImageMapCssVariables(this);
+  }
+
+  public updateCSSVariables(): void {
+
+    if (!this.svg) return;
+
+    applyImageMapCssVariables(this.svg, this.getCSSVariablesMap());
+  }
+
+  public dispose(): void {
+    super.dispose();
+  }
+
+  requestAnimationFrameId: number;
+  public renderSVG(): void {
+    if (!this.svg) return;
+    if (this.requestAnimationFrameId) return;
+
+    this.requestAnimationFrameId = requestAnimationFrame(() => {
+      this.requestAnimationFrameId = null;
+      this.svg.innerHTML = "";
+      for (const areas of this.areas) {
+        areas.render(this.svg);
+      }
+      this.drawAreaControls();
+    });
+  }
+
+  protected onCheckForErrors(errors: Array<SurveyError>, isOnValueChanged: boolean, fireCallback: boolean): void {
+    super.onCheckForErrors(errors, isOnValueChanged, fireCallback);
+    if (this.isMultiSelect) {
+      const length = Array.isArray(this.value) ? this.value.length : 0;
+      if (this.maxSelectedAreas > 0 && length > this.maxSelectedAreas) {
+        errors.push(new CustomError(
+          this.getLocalizationFormatString("maxSelectError", this.maxSelectedAreas),
+          this
+        ));
+      }
+      if (this.minSelectedAreas > 0 && length < this.minSelectedAreas) {
+        errors.push(new CustomError(
+          this.getLocalizationFormatString("minSelectError", this.minSelectedAreas),
+          this
+        ));
+      }
+    }
+  }
+
+  protected convertToCorrectValue(val: any): any {
+    if (this.isMultiSelect) {
+      val = new PropertyNameArray(val, this.valuePropertyName).convert(val);
+    }
+    return super.convertToCorrectValue(val);
+  }
+  // The area value an item of the value stands for: the item itself, or its valuePropertyName field
+  // while several areas are selected (convertToCorrectValue wraps the items into objects then).
+  private getItemAreaValue(val: any): any {
+    return this.isMultiSelect ? new PropertyNameArray([val], this.valuePropertyName).getValue(0) : val;
+  }
+
+  public getDisplayValueCore(keysAsText: boolean, value: any): any {
+
+    if (!value) return value;
+    if (!Array.isArray(value)) value = [value];
+
+    value = value.map((e: any) => {
+      if (typeof e === "object") {
+        return this.valuePropertyName ? e[this.valuePropertyName] : undefined;
+      }
+      return e;
+    }).filter(e => e !== undefined);
+
+    value = value.map(e =>{
+      return this.areas.find(item => item.value === e)?.text || undefined;
+    }).filter(e => e !== undefined).join(settings.choicesSeparator);
+
+    return value;
+  }
+
+  public mapItemToggle(item: ImageMapArea): void {
+    if (this.isInDesignMode) {
+      this.selectedArea = (this.selectedArea === item ? undefined : item);
+      return;
+    }
+    if (this.isReadOnly || !item.enabled) return;
+    if (!this.isMultiSelect) {
+      this.value = (this.value === item.value ? undefined : item.value);
+      return;
+    }
+    this.value = new PropertyNameArray(this.value, this.valuePropertyName).toggle(item.value, this.maxSelectedAreas);
+  }
+
+  // The field a selected area keeps in its object (valuePropertyName): a dynamic panel or matrix
+  // sharing the value knows it through these, as with a checkbox.
+  public hasValueItemKey(key: string): boolean {
+    return !!key && getImageMapItemFields(this.isMultiSelect, this.valuePropertyName).indexOf(key) > -1;
+  }
+  public getQuestionFromArray(name: string, index: number): IQuestion {
+    if (this.hasValueItemKey(name)) {
+      const v = this.value;
+      if (Array.isArray(v) && index < v.length) return this;
+    }
+    return null;
+  }
+
+  public isItemSelected(item: ImageMapArea): boolean {
+    if (this.isInDesignMode) return this.selectedArea === item;
+    if (!this.isMultiSelect) return this.value === item.value;
+    return new PropertyNameArray(this.value, this.valuePropertyName).contains(item.value);
+  }
+
+  public isItemHovered(item: ImageMapArea): boolean {
+    if (!this.hoveredUID) return false;
+    const hoveredItem = this.areas.find(i => i.renderedId === this.hoveredUID);
+    if (!hoveredItem) return false;
+    return this.isInDesignMode ? item.renderedId === this.hoveredUID : item.value === hoveredItem.value;
+  }
+
+  public addItem(value: any): ImageMapArea {
+    const item = new ImageMapArea(value);
+    this.areas.push(item);
+    return item;
+  }
+
+  public createControlPoint(x, y, idx) {
+
+    const circle = createSVGElement("circle");
+    circle.setAttribute("cx", x);
+    circle.setAttribute("cy", y);
+    circle.setAttribute("r", "4");
+    circle.setAttribute("class", this.cssClasses.svgControlPoint);
+    circle.dataset["idx"] = idx.toString();
+
+    return circle;
+  }
+
+  controlPoints: SVGElement[] = [];
+  activeControlPoint: SVGElement;
+  public drawAreaControls(): void {
+
+    // TODO: remove recreation of control points on each call
+    if (!this.isInDesignMode) return;
+
+    for (const control of this.controlPoints) {
+      if (control.parentNode !== this.svg) continue;
+      this.svg.removeChild(control);
+    }
+
+    this.controlPoints = [];
+
+    const item = this.areas.find(area => area === this.selectedArea);
+    if (!item) return;
+
+    const shape = item.getShape();
+    const coords = item.getCoords();
+
+    switch(shape) {
+      case "rect":
+        for (let i = 0; i < 4; i += 2) {
+          const controlPoint = this.createControlPoint(coords[i], coords[i + 1], this.controlPoints.length);
+          this.svg.appendChild(controlPoint);
+          this.controlPoints.push(controlPoint);
+        }
+        break;
+      case "circle":
+        for (const [x, y] of [
+          [coords[0], coords[1]],
+          [Number(coords[0]) + Number(coords[2]), coords[1]]
+        ]) {
+          const controlPoint = this.createControlPoint(x, y, this.controlPoints.length);
+          this.svg.appendChild(controlPoint);
+          this.controlPoints.push(controlPoint);
+        }
+        break;
+      case "poly":
+        for (let i = 0; i < coords.length; i += 2) {
+          const controlPoint = this.createControlPoint(coords[i], coords[i + 1], this.controlPoints.length);
+          this.svg.appendChild(controlPoint);
+          this.controlPoints.push(controlPoint);
+        }
+        break;
+    }
+  }
+}
+
+export class ImageMapArea extends ItemValue {
+
+  constructor(value: any) {
+    super(value);
+  }
+
+  public getBaseType(): string {
+    return "imagemaparea";
+  }
+
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+
+    const owner = this.locOwner as QuestionImageMapModel;
+
+    if ([
+      "idleStrokeColor", "idleStrokeWidth", "idleFillColor",
+      "hoverStrokeColor", "hoverStrokeWidth", "hoverFillColor",
+      "selectedStrokeColor", "selectedStrokeWidth", "selectedFillColor"
+    ].indexOf(name) > -1)this.updateCSSVariables();
+
+    if (name === "shape") {
+      owner.renderSVG();
+    }
+
+    if (name === "coords") {
+      this.draw();
+      owner.renderSVG();
+    }
+  }
+
+  @property() shape: string;
+  public getShape(): string {
+    const owner = this.locOwner as QuestionImageMapModel;
+    return this.shape === "inherit" ? owner?.shape : this.shape;
+  }
+
+  @property() coords: string;
+  public getCoords(): string[] {
+
+    const shape = this.getShape();
+    let coords = this.coords ? this.coords.split(",").map(c => c.trim()).filter(c => c !== "") : [];
+
+    switch(shape) {
+      case "rect":
+        coords = (coords.length < 4 ? ["10", "10", "100", "50"] : coords);
+        break;
+      case "circle":
+        coords = (coords.length < 3 ? ["50", "50", "40"] : coords);
+        break;
+      case "poly":
+        coords = (!coords.length ? ["50", "10", "90", "90", "10", "90"] : coords);
+        break;
+    }
+
+    return coords;
+  }
+  public getSVGCoords(): string[] {
+
+    const coords = this.getCoords();
+    const shape = this.getShape();
+
+    switch(shape) {
+      case "rect":
+        let [x1, y1, x2, y2] = coords.map(Number);
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        const width = Math.abs(x2 - x1);
+        const height = Math.abs(y2 - y1);
+        return [x, y, width, height].map(e => e.toString());
+      case "circle":
+        return [coords[0], coords[1], coords[2]];
+      case "poly":
+        return coords;
+    }
+
+  }
+  public addCoord(x, y) {
+    const shape = this.getShape();
+    if (shape !== "poly") return;
+    const coords = this.getCoords();
+    this.coords = coords + `,${x},${y}`;
+  }
+  public removeCoord(idx: number) {
+    const shape = this.getShape();
+    if (shape !== "poly") return;
+    const coords = this.getCoords();
+    if (coords.length / 2 <= 3) return;
+    coords.splice(idx * 2, 2);
+    this.coords = coords.join(",");
+  }
+  public setCoord(idx: number, x: number, y: number) {
+
+    const coords = this.getCoords();
+    const shape = this.getShape();
+
+    switch(shape) {
+      case "rect":
+        if (idx < 0 || idx > 1) return;
+        coords[idx * 2] = x.toString();
+        coords[idx * 2 + 1] = y.toString();
+        break;
+      case "circle":
+        if (idx < 0 || idx > 1) return;
+        if (idx === 0) {
+          coords[idx * 2] = x.toString();
+          coords[idx * 2 + 1] = y.toString();
+        } else {
+          const cx = Number(coords[0]);
+          const cy = Number(coords[1]);
+          coords[2] = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)).toString();
+        }
+        break;
+      case "poly":
+        coords[idx * 2] = x.toString();
+        coords[idx * 2 + 1] = y.toString();
+        break;
+    }
+
+    this.coords = coords.join(",");
+  }
+
+  public draw(): void {
+
+    const shape = this.getShape();
+
+    switch(shape) {
+      case "rect":
+        let [x, y, width, height] = this.getSVGCoords();
+        this.svg.setAttribute("x", x);
+        this.svg.setAttribute("y", y);
+        this.svg.setAttribute("width", width);
+        this.svg.setAttribute("height", height);
+        break;
+      case "circle":
+        const [cx, cy, r] = this.getSVGCoords();
+        this.svg.setAttribute("cx", cx);
+        this.svg.setAttribute("cy", cy);
+        this.svg.setAttribute("r", r);
+        break;
+      case "poly":
+        this.svg.setAttribute("points", this.getSVGCoords().join(","));
+        break;
+    }
+  }
+
+  @property() idleFillColor: string;
+  @property() idleStrokeColor: string;
+  @property() idleStrokeWidth: number;
+
+  @property() hoverFillColor: string;
+  @property() hoverStrokeColor: string;
+  @property() hoverStrokeWidth: number;
+
+  @property() selectedFillColor: string;
+  @property() selectedStrokeColor: string;
+  @property() selectedStrokeWidth: number;
+
+  public render(container: SVGElement) {
+
+    if (!container) return;
+
+    const el = this.getSVGElement();
+    this.updateCSSVariables();
+    this.updateCSSClasses();
+
+    el.setAttribute("title", this.text ? this.text : "");
+
+    if (!this.visible) return;
+    if (el.ownerSVGElement === container) return;
+    container.appendChild(el);
+  }
+
+  public svg: SVGElement;
+  public getSVGElement() {
+
+    const shape = this.getShape();
+
+    if (this.svg && this.svg.tagName === shape) {
+      return this.svg;
+    }
+
+    const document = DomDocumentHelper.getDocument();
+    if (!document) return;
+
+    const el = document.createElementNS("http://www.w3.org/2000/svg", shape === "poly" ? "polygon" : shape);
+    el.dataset["uid"] = this.renderedId;
+    this.svg = el;
+
+    this.draw();
+
+    return this.svg;
+  }
+
+  public getCSSVariablesMap(): { [index: string]: string } {
+    return buildImageMapCssVariables(this);
+  }
+
+  public getCSSClasses(): string {
+
+    const owner = this.locOwner as QuestionImageMapModel;
+
+    if (!owner) return "";
+
+    const classes = owner.cssClasses;
+
+    const isSelected = owner.isItemSelected(this);
+    const isHovered = owner.isItemHovered(this);
+    const isEnabled = this.enabled;
+
+    if (!isEnabled) return classes.svgItemDisabled;
+    if (isSelected) return classes.svgItemSelected;
+    if (isHovered) return classes.svgItemHovered;
+
+    return classes.svgItem;
+  }
+
+  public updateCSSVariables(): void {
+
+    if (!this.svg) return;
+
+    applyImageMapCssVariables(this.svg, this.getCSSVariablesMap());
+  }
+
+  public updateCSSClasses(): void {
+
+    if (!this.svg) return;
+
+    this.svg.setAttribute("class", this.getCSSClasses());
+  }
+}
+
+Serializer.addClass(
+  "imagemaparea",
+  [
+    { name: "value", isUnique: false },
+    { name: "shape", choices: ["inherit", "circle", "rect", "poly"], default: "inherit" },
+    { name: "coords:string", locationInTable: "detail" },
+
+    { name: "idleFillColor:color", locationInTable: "detail" },
+    { name: "idleStrokeColor:color", locationInTable: "detail" },
+    { name: "idleStrokeWidth:number", locationInTable: "detail" },
+
+    { name: "hoverFillColor:color", locationInTable: "detail" },
+    { name: "hoverStrokeColor:color", locationInTable: "detail" },
+    { name: "hoverStrokeWidth:number", locationInTable: "detail" },
+
+    { name: "selectedFillColor:color", locationInTable: "detail" },
+    { name: "selectedStrokeColor:color", locationInTable: "detail" },
+    { name: "selectedStrokeWidth:number", locationInTable: "detail" },
+  ],
+  () => new ImageMapArea(""),
+  "itemvalue"
+);
+
+Serializer.addClass(
+  "imagemap",
+  [
+    { name: "imageLink:file", },
+    { name: "areas:imagemaparea[]", },
+    { name: "multiSelect:boolean", default: true, },
+    { name: "valuePropertyName" },
+
+    { name: "shape", choices: ["circle", "rect", "poly"], default: "poly", },
+
+    { name: "idleFillColor:color" },
+    { name: "idleStrokeColor:color" },
+    { name: "idleStrokeWidth:number" },
+
+    { name: "hoverFillColor:color" },
+    { name: "hoverStrokeColor:color" },
+    { name: "hoverStrokeWidth:number" },
+
+    { name: "selectedFillColor:color" },
+    { name: "selectedStrokeColor:color" },
+    { name: "selectedStrokeWidth:number" },
+
+    {
+      name: "maxSelectedAreas:number",
+      default: 0,
+      onSettingValue: (obj: any, val: any): any => {
+        if (val <= 0) return 0;
+        const min = obj.minSelectedAreas;
+        return min > 0 && val < min ? min : val;
+      }
+    },
+    {
+      name: "minSelectedAreas:number",
+      default: 0,
+      onSettingValue: (obj: any, val: any): any => {
+        if (val <= 0) return 0;
+        const max = obj.maxSelectedAreas;
+        return max > 0 && val > max ? max : val;
+      }
+    },
+  ],
+  () => new QuestionImageMapModel(""),
+  "question"
+);
+

@@ -1,11 +1,11 @@
-import { StylesManager } from "../../src/stylesmanager";
+import { DropdownListModel } from "survey-core";
 import { registerMarkupTests } from "./helper";
 
 registerMarkupTests(
   [{
     name: "Test Rating question integers",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -18,9 +18,41 @@ registerMarkupTests(
     snapshot: "rating-simple",
   },
   {
-    name: "Test Rating question min/max labels",
+    name: "Test Rating question integers readonly",
     json: {
-      questions: [
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          readOnly: "true",
+          rateMax: 4,
+          titleLocation: "hidden"
+        }
+      ]
+    },
+    snapshot: "rating-simple-readonly",
+  },
+  {
+    name: "Test Rating question integers disabled",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          rateMax: 4,
+          titleLocation: "hidden"
+        }
+      ]
+    },
+    initSurvey: (survey) => survey.setDesignMode(true),
+    snapshot: "rating-simple-disabled",
+  },
+  {
+    name: "Test Rating question min/max labels disabled",
+    json: {
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -37,7 +69,7 @@ registerMarkupTests(
   {
     name: "Test Rating question min/max items",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -55,7 +87,7 @@ registerMarkupTests(
   {
     name: "Test Rating question as dropdown",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -66,14 +98,75 @@ registerMarkupTests(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     snapshot: "rating-as-dropdown",
+  },
+  {
+    name: "Test Rating question as dropdown with description",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          minRateDescription: "mimimi",
+          maxRateDescription: "mamama",
+          displayMode: "dropdown",
+          rateValues: [
+            1,
+            2,
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    initSurvey: (survey) => {
+      let q1 = survey.getQuestionByName("name");
+      const dropdownListModel = new DropdownListModel(q1);
+      q1["dropdownListModel"] = dropdownListModel;
+      dropdownListModel["popupModel"].isVisible = true;
+    },
+    removeIds: true,
+
+    snapshot: "rating-as-dropdown-description",
+  },
+  {
+    name: "Test Rating question as dropdown with description and rateValues text",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          minRateDescription: "mimimi",
+          maxRateDescription: "mamama",
+          displayMode: "dropdown",
+          rateValues: [
+            { value: 1, text: "One" },
+            { value: 2, text: "Two" },
+            { value: 3, text: "Three" },
+            { value: 4, text: "Four" }
+          ]
+        }
+      ]
+    },
+    initSurvey: (survey) => {
+      let q1 = survey.getQuestionByName("name");
+      const dropdownListModel = new DropdownListModel(q1);
+      q1["dropdownListModel"] = dropdownListModel;
+      dropdownListModel["popupModel"].isVisible = true;
+    },
+    removeIds: true,
+
+    snapshot: "rating-as-dropdown-description-with-text",
   },
   {
     name: "Test Rating question as dropdown readonly",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -85,14 +178,13 @@ registerMarkupTests(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     snapshot: "rating-as-dropdown-readonly",
   },
   {
     name: "Test Rating question as dropdown readonly with value",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
@@ -105,27 +197,223 @@ registerMarkupTests(
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
+
     snapshot: "rating-as-dropdown-readonly-with-value",
+  },
+  {
+    name: "Test Rating question as dropdown disabled with value",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          defaultValue: 3,
+          title: "Question title",
+          titleLocation: "hidden",
+          renderAs: "dropdown",
+          rateMax: 4,
+        }
+      ]
+    },
+    initSurvey: (survey) => survey.setDesignMode(true),
+    snapshot: "rating-as-dropdown-disabled-with-value",
+  },
+  {
+    name: "Test Rating question as dropdown with value focused",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          defaultValue: 3,
+          title: "Question title",
+          titleLocation: "hidden",
+          renderAs: "dropdown",
+          rateMax: 4,
+        }
+      ]
+    },
+    initSurvey: (survey) => {
+      let q1 = survey.getQuestionByName("name");
+      const dropdownListModel = new DropdownListModel(q1);
+      q1["dropdownListModel"] = dropdownListModel;
+      survey.autoFocusFirstQuestion = false;
+      q1["dropdownListModel"].onFocus(null);
+    },
+    timeout: 300,
+    removeIds: true,
+    snapshot: "rating-as-dropdown-with-value-focused",
   },
   {
     name: "Test Rating question as wrappable items",
     json: {
-      questions: [
+      elements: [
         {
           name: "name",
           type: "rating",
           title: "Question title",
           titleLocation: "hidden",
-          useDropdown: "never",
+          displayMode: "buttons",
           rateMax: 4,
         }
       ]
     },
-    before: () => StylesManager.applyTheme("defaultV2"),
-    after: () => StylesManager.applyTheme("default"),
-    snapshot: "rating-as-wrappable",
-  }
-  ]
+
+    snapshot: "rating-as-wrappable"
+  },
+  {
+    name: "Test Rating question as stars",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          rateType: "stars",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-stars",
+  },
+  {
+    name: "Test Rating question as stars readonly",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          readonly: "true",
+          rateType: "stars",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-stars-readonly",
+  },
+  {
+    name: "Test Rating question as stars readonly view",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          readOnly: true,
+          readOnlyMode: "view",
+          rateType: "stars",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-stars-readonly-view",
+  },
+  {
+    name: "Test Rating question as stars disabled",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          rateType: "stars",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-stars-disabled",
+    initSurvey: (survey) => survey.setDesignMode(true),
+  },
+  {
+    name: "Test Rating question as smileys",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          rateType: "smileys",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-smileys",
+  },
+  {
+    name: "Test Rating question as smileys readonly",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          readOnly: true,
+          rateType: "smileys",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-smileys-readonly",
+  },
+  {
+    name: "Test Rating question as smileys readonly view",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          readOnly: true,
+          readOnlyMode: "view",
+          rateType: "smileys",
+          rateMax: 2,
+        }
+      ]
+    },
+    snapshot: "rating-smileys-readonly-view",
+  },
+  {
+    name: "Test Rating question as smileys disabled",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          rateType: "smileys",
+          rateMax: 2,
+        }
+      ]
+    },
+    initSurvey: (survey) => survey.setDesignMode(true),
+    snapshot: "rating-smileys-disabled",
+  },
+  {
+    name: "Test Rating question display mode",
+    json: {
+      elements: [
+        {
+          name: "name",
+          type: "rating",
+          title: "Question title",
+          titleLocation: "hidden",
+          displayMode: "buttons",
+          rateMax: 4,
+        }
+      ]
+    },
+    initSurvey: survey => {
+      survey.readOnly = true;
+    },
+    snapshot: "rating-display-mode",
+  }]
 );

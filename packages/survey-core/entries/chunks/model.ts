@@ -1,0 +1,368 @@
+// styles
+// import "../../src/main.scss";
+//import "../../src/modern.scss";
+
+import { settings } from "../../src/settings";
+import { _slk } from "./license";
+
+export var Version: string;
+export var ReleaseDate: string;
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+//@ts-ignore
+Version = `${process.env.VERSION}`;
+settings.version = Version;
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+//@ts-ignore
+ReleaseDate = `${process.env.RELEASE_DATE}`;
+
+export function checkLibraryVersion(ver: string, libraryName: string): void {
+  if (Version != ver) {
+    const str = "survey-core has version '" + Version + "' and " + libraryName
+      + " has version '" + ver + "'. SurveyJS libraries should have the same versions to work correctly.";
+    /* eslint no-console: ["error", { allow: ["error"] }] */
+    console.error(str);
+  }
+}
+// SurveyJS license keys are issued only by Devsoft Baltic OU via surveyjs.io.
+// Generating, modifying or forging keys is prohibited; see the notice in ./license.ts.
+export function setLicenseKey(key: string): void {
+  slk(key);
+}
+export function slk(key: string): void {
+  _slk(key, ReleaseDate);
+}
+export { hasLicense, glc } from "./license";
+
+export { settings, ISurveyEnvironment } from "../../src/settings";
+export type { ISurveySettings, ISurveySettingsComparator, ISurveySettingsData, ISurveyOptions, SurveyEventHandlers } from "../../src/survey-settings";
+export { Helpers, HashTable, ISurveyDateProvider } from "../../src/helpers";
+export {
+  SurveyVariablePresets,
+  ISurveyVariablePreset,
+  ISurveyVariablePresets,
+  ISurveyVariableError,
+  ISurveyVariableValidationResult
+} from "../../src/variablePresets";
+export { DomWindowHelper, DomDocumentHelper } from "../../src/global_variables_utils";
+export {
+  AnswerCountValidator,
+  EmailValidator,
+  NumericValidator,
+  RegexValidator,
+  SurveyValidator,
+  TextValidator,
+  ValidatorResult,
+  ExpressionValidator,
+  ValidatorRunner
+} from "../../src/validator";
+export { ItemValue } from "../../src/itemvalue";
+export {
+  Base,
+  PropertyAccessTracker,
+  IPropertyAccessListener,
+  IPropertyAccessTracker,
+  ArrayChanges,
+  ComputedUpdater,
+  IPropertyValueChangedEvent,
+  IPropertyArrayValueChangedEvent,
+  IExpressionValidationOptions,
+  IExpressionValidationResult,
+} from "../../src/base";
+export * from "../../src/event";
+export {
+  ISurvey,
+  ISurveyElementLifecycle,
+  ISurveyFileCallbacks,
+  ISurveyMatrixCallbacks,
+  ISurveyDynamicPanelCallbacks,
+  ISurveyChoiceCallbacks,
+  ISurveyCssCallbacks,
+  ISurveyAfterRenderCallbacks,
+  ISurveyWebProvider,
+  ISurveyWebRequest,
+  ISurveyWebResponse,
+  ISurveyTitleSettings,
+  ISurveyValidation,
+  ISurveySingleInput,
+  ISurveyElement,
+  IElement,
+  IQuestion,
+  IPage,
+  IPanel,
+  ISurveyData,
+  ITitleOwner,
+  ISurveyLayoutElement,
+  IPlainDataOptions as IPlainData,
+  IShortcutText,
+  ILoadFromJSONOptions,
+  ISaveToJSONOptions,
+  HorizontalAlignment,
+  VerticalAlignment,
+  DataIssueType,
+  IDataVerificationOptions,
+  IDataIssue
+} from "../../src/base-interfaces";
+export { SurveyError } from "../../src/survey-error";
+export { SurveyElementCore, SurveyElement } from "../../src/survey-element";
+export { CalculatedValue } from "../../src/calculatedValue";
+export {
+  CustomError,
+  AnswerRequiredError,
+  OneAnswerRequiredError,
+  RequreNumericError,
+  ExceedSizeError,
+  ExceedFilesCountError,
+  IncorrectValueError
+} from "../../src/error";
+export {
+  ILocalizableOwner,
+  ILocalizableString,
+  LocalizableString,
+  LocalizableStrings
+} from "../../src/localizablestring";
+export { ExpressionItem, HtmlConditionItem, UrlConditionItem } from "../../src/expressionItems";
+export { ChoicesRestful, ChoicesRestfull } from "../../src/choicesRestful";
+export { FunctionFactory, registerFunction, IFunctionRegistration, IFunctionParameter, isReturnColumnParam } from "../../src/functionsfactory";
+export { IExpressionError, ExpressionErrorType } from "../../src/expressions/expressionError";
+export { ExpressionRunner } from "../../src/expressions/expressionRunner";
+export { ExpressionExecutorRunner } from "../../src/expressions/expressionExecutor";
+export { IExpressionExecutor, IExpressionExecutor as IExpresionExecutor } from "../../src/expressions/expressionExecutor";
+export { ConditionRunner } from "../../src/conditions/conditionRunner";
+export {
+  Operand,
+  Const,
+  BinaryOperand,
+  Variable,
+  FunctionOperand,
+  ArrayOperand,
+  UnaryOperand,
+  runBinaryOperator,
+  IOperandToStringContext
+} from "../../src/expressions/expressions";
+export { ConditionsParser } from "../../src/conditions/conditionsParser";
+export { ConditionEditorItem, SurveyConditionEditorItem, ConditionEditorItemsBuilder } from "../../src/conditions/conditionEditorItems";
+export {
+  isConditionOperatorEnabled,
+  isQuestionTypeInList,
+  isQuestionClassContains,
+  getConditionOperatorNames,
+  getConditionDefaultOperator
+} from "../../src/conditions/conditionOperators";
+export { ProcessValue, ValueGetter, VariableGetterContext, findNameByPath, parseValuePath } from "../../src/conditions/conditionProcessValue";
+export {
+  JsonError,
+  JsonIncorrectTypeError,
+  JsonMetadata,
+  JsonMetadataClass,
+  JsonMissingTypeError,
+  JsonMissingTypeErrorBase,
+  JsonObject,
+  IJsonPropertyInfo,
+  JsonObjectProperty,
+  JsonRequiredPropertyError,
+  JsonUnknownPropertyError,
+  Serializer,
+} from "../../src/jsonobject";
+export { property, propertyArray } from "../../src/decorators";
+export { QuestionRecordsModel } from "../../src/question_records";
+export { QuestionRecordsBar } from "../../src/question_records_bar";
+export { RecordsSortDialogModel } from "../../src/records/records-sort-dialog";
+export { IRecordsSortField } from "../../src/records/records-sort-bar";
+export {
+  IMatrixDropdownData,
+  MatrixDropdownCell,
+  MatrixDropdownRowModelBase,
+  QuestionMatrixDropdownModelBase
+} from "../../src/question_matrixdropdownbase";
+export { MatrixDropdownColumn, matrixDropdownColumnTypes } from "../../src/question_matrixdropdowncolumn";
+export { QuestionMatrixDropdownRenderedCell, QuestionMatrixDropdownRenderedRow, QuestionMatrixDropdownRenderedErrorRow, QuestionMatrixDropdownRenderedTable } from "../../src/question_matrixdropdownrendered";
+export {
+  MatrixDropdownRowModel,
+  QuestionMatrixDropdownModel
+} from "../../src/question_matrixdropdown";
+export {
+  MatrixDynamicRowModel,
+  QuestionMatrixDynamicModel
+} from "../../src/question_matrixdynamic";
+export {
+  MatrixRowModel,
+  MatrixCells,
+  QuestionMatrixModel,
+  MatrixColumn,
+  IMatrixData
+} from "../../src/question_matrix";
+export {
+  MultipleTextItemModel,
+  MultipleTextCell,
+  MultipleTextErrorCell,
+  MutlipleTextErrorRow,
+  MutlipleTextRow,
+  QuestionMultipleTextModel,
+  MultipleTextEditorModel
+} from "../../src/question_multipletext";
+export { PanelModel, PanelModelBase, QuestionRowModel } from "../../src/panel";
+export { FlowPanelModel } from "../../src/flowpanel";
+export { PageModel } from "../../src/page";
+export * from "../../src/template-renderer";
+export { DefaultTitleModel } from "../../src/defaultTitle";
+export { Question, QuestionValueType, ValidationContext } from "../../src/question";
+export type { IValidationContextParams } from "../../src/question";
+export { KeyboardHintItem, KeyboardHintModel } from "../../src/keyboard-hints";
+export type { IKeyboardHintData, IKeyboardHintPart, IKeyboardHintCss } from "../../src/keyboard-hints";
+export { QuestionSingleInputSummary, QuestionSingleInputSummaryItem } from "../../src/questionSingleInputSummary";
+export { QuestionNonValue } from "../../src/questionnonvalue";
+export { QuestionEmptyModel } from "../../src/question_empty";
+export {
+  QuestionCheckboxBase,
+  QuestionSelectBase,
+  ChoiceItem,
+  ISelectQuestion
+} from "../../src/question_baseselect";
+export { QuestionCheckboxModel, CheckboxItem, getCheckboxItemFields } from "../../src/question_checkbox";
+export { QuestionTagboxModel } from "../../src/question_tagbox";
+export { QuestionRankingModel } from "../../src/question_ranking";
+export { QuestionCommentModel } from "../../src/question_comment";
+export { QuestionDropdownModel } from "../../src/question_dropdown";
+export { QuestionFactory, ElementFactory } from "../../src/questionfactory";
+export { QuestionFileModelBase, QuestionFileModel, QuestionFilePage } from "../../src/question_file";
+export { QuestionHtmlModel } from "../../src/question_html";
+export { QuestionRadiogroupModel } from "../../src/question_radiogroup";
+export { QuestionRatingModel, RatingItem as RatingItemValue, RatingItem as RenderedRatingItem } from "../../src/question_rating";
+export { QuestionSliderModel, SliderLabelItemValue } from "../../src/question_slider";
+export { QuestionExpressionModel } from "../../src/question_expression";
+export { QuestionTextBase, CharacterCounter, ICharacterCounterAction } from "../../src/question_textbase";
+export { QuestionTextModel } from "../../src/question_text";
+export { QuestionBooleanModel } from "../../src/question_boolean";
+export {
+  QuestionImagePickerModel,
+  ImageItemValue
+} from "../../src/question_imagepicker";
+export { QuestionImageMapModel, getImageMapItemFields } from "../../src/question_imagemap";
+export { QuestionImageModel } from "../../src/question_image";
+export { QuestionSignaturePadModel } from "../../src/question_signaturepad";
+export {
+  QuestionPanelDynamicModel,
+  QuestionPanelDynamicItem
+} from "../../src/question_paneldynamic";
+export { LocalDynamicDataSource, ArrayDynamicDataSource, SurveyDataDynamicDataSource } from "../../src/dynamic-data/dynamic-data-sources";
+export type { IArrayDynamicDataSourceOptions } from "../../src/dynamic-data/dynamic-data-sources";
+export type {
+  IDynamicDataSource, IDynamicDataSourceCapabilities, IDynamicDataReadRequest, IDynamicDataReadResult, ISortCriterion, IDynamicDataField,
+  SortDirection,
+  DynamicDataFieldType, DynamicDataSourceMethod, DynamicDataErrorOperation, DynamicDataOperation
+} from "../../src/dynamic-data/dynamic-data-interfaces";
+export { SurveyTimer } from "../../src/surveytimer";
+export { SurveyTimerModel } from "../../src/surveyTimerModel";
+export { SurveyProgressTextModel } from "../../src/surveyProgressTextModel";
+export { SurveyNavigationLayoutModel } from "../../src/surveyNavigationLayoutModel";
+export * from "../../src/surveyToc";
+export { SurveyProgressModel } from "../../src/surveyProgress";
+export { ProgressButtons } from "../../src/progress-buttons";
+export * from "../../src/themes";
+export { SurveyModel, DefaultTheme, getBuiltInVariableNames } from "../../src/survey";
+export { IRunningAsyncOperation, SurveyAsyncOperationType } from "../../src/survey";
+export * from "../../src/survey-events-api";
+export type {
+  AIMessage, AIResponseFormat, AIRequestIssue, AIResponse, AIRequestEvent, ExpressionAIRequestEvent,
+} from "../../src/interfaces/ai-interfaces";
+export { isAIObject, getAIFencedText, getAIFencedBlocks, readAIJson } from "../../src/ai/ai-response";
+export { AIRequestSession } from "../../src/ai/ai-request";
+export type { IAIFeature, IAIRequest, AIRequestResult, IAIRequestOwner } from "../../src/ai/ai-request";
+export { readExpressionData, parseExpressionResponse } from "../../src/ai/expression-response";
+export type { IExpressionResponse } from "../../src/ai/expression-response";
+export { expressionGuideVersion, expressionGuideSections, getExpressionGuideText } from "../../src/ai/expression-guide";
+export type { IExpressionGuideSection, IExpressionGuideExample } from "../../src/ai/expression-guide";
+export { expressionResponseFormat, ExpressionAIFeature } from "../../src/ai/expression-ai-feature";
+export type { IExpressionAIIssue } from "../../src/ai/expression-ai-feature";
+export {
+  expressionOperatorSpellings, expressionPanelScope, expressionRowScope, expressionItemScope, getExpressionScopePrefix,
+  getExpressionValueType, toExpressionChoices, getExpressionChoices, getExpressionPageName, describeExpressionQuestion,
+  getExpressionFunctions, getExpressionOperators, buildExpressionInstruction, buildExpressionSystemPrompt,
+} from "../../src/ai/expression-context";
+export type {
+  IExpressionContext, IExpressionVariable, IExpressionContextChoice, IExpressionContextFunction, IExpressionContextOperator,
+  IExpressionScopeEntry, IExpressionSystemPromptTexts,
+} from "../../src/ai/expression-context";
+export {
+  SurveyTrigger,
+  SurveyTriggerComplete,
+  SurveyTriggerSetValue,
+  SurveyTriggerVisible,
+  SurveyTriggerCopyValue,
+  SurveyTriggerRunExpression,
+  SurveyTriggerSkip,
+  Trigger,
+  buildTriggerExpression
+} from "../../src/trigger";
+export { PopupSurveyModel, SurveyWindowModel } from "../../src/popup-survey";
+export { TextPreProcessor } from "../../src/textPreProcessor";
+export { Notifier } from "../../src/notifier";
+export { Cover, CoverCell } from "../../src/header";
+
+export { englishStrings } from "../../src/localization/english";
+export { surveyLocalization, surveyStrings, getLocaleString, getLocaleStrings, setupLocale } from "../../src/surveyStrings";
+// export { cultureInfo } from "../../src/cultureInfo";
+export {
+  QuestionCustomWidget,
+  CustomWidgetCollection,
+} from "../../src/questionCustomWidgets";
+export {
+  QuestionCustomModel,
+  QuestionCompositeModel,
+  ComponentQuestionJSON,
+  ComponentCollection,
+  ICustomQuestionTypeConfiguration
+} from "../../src/question_custom";
+
+export { ScrollViewModel } from "../../src/scroll";
+export { ListModel } from "../../src/list";
+export { MultiSelectListModel } from "../../src/multiSelectListModel";
+export { PopupModel, IDialogOptions, IConfirmDialogOptions } from "../../src/popup";
+export { PopupBaseViewModel } from "../../src/popup-view-model";
+export { PopupDropdownViewModel } from "../../src/popup-dropdown-view-model";
+export { PopupModalViewModel } from "../../src/popup-modal-view-model";
+export { createPopupViewModel, createPopupModalViewModel } from "../../src/popup-utils";
+export { PopupModalManager } from "../../src/popup-modal-manager";
+export { DropdownListModel } from "../../src/dropdownListModel";
+export { DropdownMultiSelectListModel } from "../../src/dropdownMultiSelectListModel";
+export { DropdownRenderState, DropdownMultiSelectRenderState } from "../../src/dropdownRenderState";
+export {
+  QuestionButtonGroupModel,
+  ButtonGroupItemModel,
+  ButtonGroupItemValue
+} from "../../src/question_buttongroup";
+export { indexToChoiceKeyCode, choiceKeyCodeToIndex } from "../../src/utils/choice-key-codes";
+export { IsMobile, IsTouch, _setIsTouch, _setIsTablet } from "../../src/utils/devices";
+export * from "../../src/utils/browser";
+export * from "../../src/utils/color";
+export * from "../../src/utils/confirm-dialog";
+export * from "../../src/utils/dom-utils";
+export * from "../../src/utils/file-utils";
+export * from "../../src/utils/icons";
+export * from "../../src/utils/key2click";
+export * from "../../src/utils/animation-dom";
+export { InputMaskBase } from "../../src/mask/mask_base";
+export { IMaskLocaleChange } from "../../src/mask/mask_utils";
+export { IDateTimeInputFragments } from "../../src/mask/mask_datetime";
+export { ILocaleData, localeData, getLocaleDataValue, getLocaleDataLocales, findLocaleDataKey, canonicalizeLocale } from "../../src/locale-data";
+export { RegionalFormat, regionalFormatCategory } from "../../src/regional-format";
+export { InputMaskPattern } from "../../src/mask/mask_pattern";
+export { InputMaskNumeric, isValidDecimalSeparator, isValidThousandsSeparator } from "../../src/mask/mask_numeric";
+export { InputMaskDateTime } from "../../src/mask/mask_datetime";
+export { InputMaskCurrency, isValidCurrencyPattern, isValidCurrencySymbol } from "../../src/mask/mask_currency";
+export * from "../../src/utils/cssClassBuilder";
+export * from "../../src/utils/text-area";
+export * from "../../src/utils/shadow-effects";
+export * from "../../src/utils/resize-manager";
+export * from "../../src/utils/base-theme-init";
+export { setupThemeAdapter } from "../../src/utils/setupThemeAdapter";
+
+export { surveyCss, defaultCss, defaultThemeName } from "../../src/defaultCss/defaultCss";
+
+//Uncomment to include the "date" question type.
+//export {default as QuestionDateModel} from "../../src/plugins/question_date";
+
+export { DragDropCore } from "../../src/dragdrop/core";
+export { DragDropChoices } from "../../src/dragdrop/choices";
+export { DragDropRankingSelectToRank } from "../../src/dragdrop/ranking-select-to-rank";
+export { default as BaseTheme } from "../../src/default-theme/base-theme";

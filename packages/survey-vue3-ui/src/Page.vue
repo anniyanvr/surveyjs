@@ -1,0 +1,69 @@
+<template>
+  <div :class="page.cssRoot" ref="root">
+    <div v-if="page.hasTitle || showDescription" :class="page.cssHeader">
+      <SvComponent :is="'survey-element-title'" :element="page" :css="css" />
+      <div v-if="showDescription" :class="page.cssClasses.page.description">
+        <SvComponent :is="'survey-string'" :locString="page.locDescription" />
+      </div>
+    </div>
+    <div :class="page.cssContent">
+      <SvComponent :is="'survey-errors'" :element="page" />
+      <template v-for="row in page.visibleRows" :key="row.id">
+        <SvComponent
+          :is="(page.getSurvey() as SurveyModel).getRowWrapperComponentName(row)"
+          v-bind="{
+            componentData: (page.getSurvey() as SurveyModel).getRowWrapperComponentData(row),
+          }"
+        >
+          <SvComponent :is="'survey-row'" :row="row" :survey="survey" :css="css">
+          </SvComponent>
+        </SvComponent>
+      </template>
+    </div>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import SvComponent from "@/SvComponent.vue";
+import type { SurveyModel } from "survey-core";
+import type { PageModel } from "survey-core";
+import { computed, nextTick, onMounted, ref } from "vue";
+import { useBase } from "./base";
+
+const props = defineProps<{
+  survey: SurveyModel;
+  page: PageModel;
+  css?: object;
+}>();
+
+const root = ref<HTMLElement>(null as any);
+
+// Fire after the whole render flush. onMounted runs before sibling components (the progress bar)
+// reach onUpdated, and useBase drops model changes until then, so a value set in an
+// onAfterRenderPage handler would not re-render them.
+// useBase calls this during setup too (immediate watch). There is no DOM yet and onMounted
+// fires it, so skip that call; otherwise both deferred calls would see root and fire twice.
+const onAfterRender = () => {
+  if (!root.value) return;
+  nextTick(() => {
+    if (props.survey && root.value) {
+      props.survey.afterRenderPage(root.value);
+    }
+  });
+};
+
+const showDescription = computed(() => {
+  return props.page._showDescription;
+});
+
+useBase(
+  () => props.page,
+  () => {
+    onAfterRender();
+  }
+);
+
+onMounted(() => {
+  onAfterRender();
+});
+</script>

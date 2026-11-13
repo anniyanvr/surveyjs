@@ -1,59 +1,88 @@
-# Add a Survey to a React Application
+---
+title: React Form Library | Getting Started Guide
+description: SurveyJS Form Library for React is an open-source UI component that renders forms built from JSON schema in React applications. It offers a rich collection of reusable input fields and other form components and simplifies form handling by managing form state, validation, and submission.
+---
+# React Form Library
 
-This step-by-step tutorial will help you get started with the SurveyJS Library in a React application. To add a survey to your React application, follow the steps below:
+SurveyJS Form Library for React is a client-side component that uses JSON objects to render dynamic forms in React applications and send submission data to a database for storage. These JSON objects contain key-value pairs representing various aspects of a form, including descriptions of each form field, instructions on how to organize form fields on the page, and how the form should behave in response to user interactions, such as submitting data, validating input, and displaying error messages. By loading the JSON schemas that define form layout and content, the rendering Form Library dynamically generates the corresponding HTML elements and displays them on a web page.
+
+This step-by-step tutorial will help you get started with the SurveyJS Form Library in a React application. To add a form to your React application, follow the steps below:
 
 - [Install the `survey-react-ui` npm Package](#install-the-survey-react-npm-package)
 - [Configure Styles](#configure-styles)
 - [Create a Model](#create-a-model)
-- [Render the Survey](#render-the-survey)
-- [Handle Survey Completion](#handle-survey-completion)
+- [Render the Form](#render-the-form)
+- [Handle Form Completion](#handle-form-completion)
 
-As a result, you will create a survey displayed below:
+As a result, you will create a form displayed below:
 
-<iframe src="https://codesandbox.io/embed/surveyjs-add-a-survey-to-a-react-application-j206b?fontsize=14&hidenavigation=1&theme=dark"
-    style="width:100%; height:500px; border:0; border-radius: 4px; overflow:hidden;"
-    title="SurveyJS - Add a Survey to a React Application"
-    sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
+<details>
+  <summary>View Live Example</summary>
+
+<iframe src="/proxy/github/code-examples/get-started-library/html-css-js/index.html"
+    style="width:100%; border:0; border-radius: 4px; overflow:hidden;"
 ></iframe>
 
-You can find the full code in the following GitHub repository: <a href="https://github.com/surveyjs/code-examples/tree/main/get-started-library/react" target="_blank">Get Started with SurveyJS - React</a>.
+</details>
+
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/get-started-library/react (linkStyle))
+
+If you are looking for a quick-start application that includes all SurveyJS components, refer to the following GitHub repositories:
+
+- <a href="https://github.com/surveyjs/surveyjs-nextjs" target="_blank">SurveyJS + Next.js</a>
+- <a href="https://github.com/surveyjs/surveyjs-remix" target="_blank">SurveyJS + Remix</a>
 
 ## Install the `survey-react-ui` npm Package
 
-The SurveyJS Library for React consists of two npm packages: [`survey-core`](https://www.npmjs.com/package/survey-core) (platform-independent code) and [`survey-react-ui`](https://www.npmjs.com/package/survey-react-ui) (rendering code). Run the following command to install `survey-react-ui`. The `survey-core` package will be installed automatically because it is listed in `survey-react-ui` dependencies.
+SurveyJS Form Library for React consists of two npm packages: [`survey-core`](https://www.npmjs.com/package/survey-core) (platform-independent code) and [`survey-react-ui`](https://www.npmjs.com/package/survey-react-ui) (rendering code). Run the following command to install `survey-react-ui`. The `survey-core` package will be installed automatically as a dependency.
 
 ```cmd
-npm install survey-react-ui --save
+npm install survey-react-ui
 ```
 
 ## Configure Styles
 
-SurveyJS ships with the Modern and Default V2 UI themes illustrated below.
+### Add Themes
 
-![Themes in SurveyJS Library](images/survey-library-themes.png)
+SurveyJS Form Library is shipped with several predefined themes illustrated below and a flexible [theme customization mechanism](/documentation/design-tokens-css-customization) based on CSS variables.
 
-Open the React component in which your survey will be and import a style sheet that implements the required theme.
+<img src="images/survey-library-themes.png" alt="Themes in SurveyJS Form Library" width="1544" height="820">
+
+To add SurveyJS themes to your application, create a React component that will render your form or survey and import the Form Library style sheet:
 
 ```js
-// Modern theme
-import 'survey-core/modern.min.css';
-// Default V2 theme
-// import 'survey-core/defaultV2.min.css';
+// components/Survey.tsx
+import 'survey-core/survey-core.css';
 ```
 
-To apply the imported theme, call the `applyTheme(themeName)` method. Depending on the theme, pass `"modern"` or `"defaultV2"` as the method's argument. For instance, the following code applies the Modern theme:
+This style sheet applies the Default theme. If you want to apply a different predefined theme or create a custom theme, refer to the following help topic for detailed instructions:
+
+[Themes](/documentation/themes-and-custom-styles (linkStyle))
+
+### Add Fonts
+
+Starting with SurveyJS v3.0.4, fonts are no longer included in SurveyJS packages. Load Open Sans separately to preserve the default appearance, unless your application already does so. If you use a custom font, load it instead. Otherwise, the browser uses a fallback font, which may affect spacing and layout.
+
+To add Open Sans using [Fontsource](https://fontsource.org/docs/getting-started/install), run the following command:
+
+```sh
+npm install @fontsource/open-sans
+```
+
+The following example imports font weights 400, 600, and 700. Place the font imports in your application's entry file or root layout to load them once for all SurveyJS components.
 
 ```js
-import { StylesManager } from 'survey-core';
-
-StylesManager.applyTheme("modern");
+// app/layout.tsx or pages/_app.tsx
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
 ```
 
 ## Create a Model
 
-A model describes the layout and contents of your survey. The simplest survey model contains one or several questions without layout modifications.
+A model describes the layout and contents of your survey. The simplest form model contains one or several questions without layout modifications.
 
-Models are specified by model definitions (JSON objects). For example, the following model definition declares two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel), each with a [title](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and a [name](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name). Titles are displayed on screen. Names are used to identify the questions in code.
+Models are specified by model schemas (JSON objects). For example, the following model schema declares two [textual questions](https://surveyjs.io/Documentation/Library?id=questiontextmodel), each with a [title](https://surveyjs.io/Documentation/Library?id=questiontextmodel#title) and a [name](https://surveyjs.io/Documentation/Library?id=questiontextmodel#name). Titles are displayed on screen. Names are used to identify the questions in code.
 
 ```js
 const surveyJson = {
@@ -66,30 +95,40 @@ const surveyJson = {
     title: "Enter your last name:",
     type: "text"
   }]
-};
+}
 ```
 
-To instantiate a model, pass the model definition to the [Model](https://surveyjs.io/Documentation/Library?id=surveymodel) constructor as shown in the code below. The model instance will be later used to render the survey.
+To instantiate a model, pass the model schema to the [`Model`](https://surveyjs.io/Documentation/Library?id=surveymodel) constructor as shown in the code below. The model instance will be later used to render the survey.
 
 ```js
-import { ..., Model } from 'survey-core';
-// ...
-function App() {
-  const survey = new Model(surveyJson);
+// components/Survey.tsx
+import { useMemo } from 'react';
+import { Model } from 'survey-core';
 
-  return ... ;
+const surveyJson = { /* ... */ }
+
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
+
+  return "...";
 }
 ```
 
 <details>
-    <summary>View full code</summary>  
+    <summary>View Full Code</summary>  
 
 ```js
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
+// app/layout.tsx or pages/_app.tsx
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
 
-StylesManager.applyTheme("modern");
+```js
+// components/Survey.tsx
+import 'survey-core/survey-core.css';
+import { useMemo } from 'react';
+import { Model } from 'survey-core';
 
 const surveyJson = {
   elements: [{
@@ -103,45 +142,73 @@ const surveyJson = {
   }]
 };
 
-function App() {
-  const survey = new Model(surveyJson);
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
 
-  return ...;
+  return "...";
 }
-
-export default App;
 ```
 </details>
 
-## Render the Survey
-To render a survey, import the `Survey` component, add it to the template, and pass the model instance you created in the previous step to the component's `model` attribute:
+<a id="render-the-survey"></a>
+
+## Render the Form
+
+To render a form, import the `Survey` component, add it to the template, and pass the model instance you created in the previous step to the component's `model` attribute, as shown below.
+
+> SurveyJS components are client-side components. Explicitly mark the React component that renders a SurveyJS component as client code using the ['use client'](https://react.dev/reference/react/use-client) directive.
 
 ```js
-import { Survey } from 'survey-react-ui';
+// components/Survey.tsx
+'use client'
 // ...
-const surveyJson = { ... };
+import { useMemo } from 'react';
+import { Survey } from 'survey-react-ui';
 
-function App() {
-  const survey = new Model(surveyJson);
+const surveyJson = { /* ... */ }
+
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
 
   return <Survey model={survey} />;
 }
 ```
 
-If you replicate the code correctly, you should see the following survey:
-
-![Get Started with SurveyJS - Primitive Survey](images/get-started-primitive-survey.png)
-
-<details>
-    <summary>View full code</summary>  
+Render the form directly in the page. The following code shows how to do that in a Next.js application: 
 
 ```js
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
-import { Survey } from 'survey-react-ui';
+// survey/page.tsx
+import SurveyComponent from '@/components/Survey';
 
-StylesManager.applyTheme("modern");
+export default function Survey() {
+  return (
+    <SurveyComponent />
+  );
+}
+```
+
+If you replicate the code correctly, you should see the following form:
+
+<img src="images/get-started-primitive-survey.png" alt="Get Started with SurveyJS - Simple Survey" width="772" height="513">
+
+<details>
+    <summary>View Full Code</summary>  
+
+```js
+// app/layout.tsx or pages/_app.tsx
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
+
+```js
+// components/Survey.tsx
+'use client'
+
+import 'survey-core/survey-core.css';
+import { useMemo } from 'react';
+import { Model } from 'survey-core';
+import { Survey } from 'survey-react-ui';
 
 const surveyJson = {
   elements: [{
@@ -155,31 +222,48 @@ const surveyJson = {
   }]
 };
 
-function App() {
-  const survey = new Model(surveyJson);
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
 
   return <Survey model={survey} />;
 }
-
-export default App;
 ```
-</details>
-
-## Handle Survey Completion
-
-After a respondent completes a survey, the results are available within the [onComplete](https://surveyjs.io/Documentation/Library?id=surveymodel#onComplete) event handler. In real-world applications, you should send the results to a server where they will be stored in a database and processed:
 
 ```js
-import { useCallback } from 'react';
+// survey/page.tsx
+import SurveyComponent from '@/components/Survey';
+
+export default function Survey() {
+  return (
+    <SurveyComponent />
+  );
+}
+```
+
+</details>
+
+<a id="handle-survey-completion"></a>
+
+## Handle Form Completion
+
+After a respondent submits a form, the results are available within the [`onComplete`](https://surveyjs.io/Documentation/Library?id=surveymodel#onComplete) event handler. In real-world applications, you should send the results to a server where they will be stored in a database and processed. If your application has a user identification system, you can add the user ID to the survey results before sending them to the server:
+
+```js
+// components/Survey.tsx
 // ...
+import { useMemo, useCallback } from 'react';
+
 const SURVEY_ID = 1;
 
-function App() {
-  const survey = new Model(surveyJson);
-  const surveyComplete = useCallback((sender) => {
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
+  const surveyComplete = useCallback((survey: Model) => {
+    const userId = /* ... Getting the user ID ... */
+    survey.setValue("userId", userId);
+
     saveSurveyResults(
       "https://your-web-service.com/" + SURVEY_ID,
-      sender.data
+      survey.data
     )
   }, []);
 
@@ -188,29 +272,38 @@ function App() {
   return <Survey model={survey} />;
 }
 
-function saveSurveyResults(url, json) {
-  const request = new XMLHttpRequest();
-  request.open('POST', url);
-  request.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
-  request.addEventListener('load', () => {
-    // Handle "load"
+function saveSurveyResults(url: string, json: object) {
+  fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=UTF-8'
+    },
+    body: JSON.stringify(json)
+  })
+  .then(response => {
+    if (response.ok) {
+      // Handle success
+    } else {
+      // Handle error
+    }
+  })
+  .catch(error => {
+    // Handle error
   });
-  request.addEventListener('error', () => {
-    // Handle "error"
-  });
-  request.send(JSON.stringify(json));
 }
 ```
 
 In this tutorial, the results are simply output in an alert dialog:
 
 ```js
-import { useCallback } from 'react';
+// components/Survey.tsx
 // ...
-function App() {
-  const survey = new Model(surveyJson);
-  const alertResults = useCallback((sender) => {
-    const results = JSON.stringify(sender.data);
+import { useMemo, useCallback } from 'react';
+
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
+  const alertResults = useCallback((survey: Model) => {
+    const results = JSON.stringify(survey.data);
     alert(results);
   }, []);
 
@@ -220,24 +313,30 @@ function App() {
 }
 ```
 
-![Get Started with SurveyJS - Survey Results](images/get-started-primitive-survey-alert.png)
+<img src="images/get-started-primitive-survey-alert.png" alt="Get Started with SurveyJS - Survey Results" width="772" height="516">
 
-As you can see, survey results are saved in a JSON object. Its properties correspond to the `name` property values of your questions in the model definition.
+As you can see, form results are saved in a JSON object. Its properties correspond to the `name` property values of your questions in the model schema.
 
-To view the application, run `npm run start` in a command line and open [http://localhost:3000/](http://localhost:3000/) in your browser.
+To view the application, run `npm run dev` in a command line and open [http://localhost:3000/](http://localhost:3000/) in your browser.
 
 <details>
-    <summary>View full code</summary>  
+    <summary>View Full Code</summary>  
 
 ```js
-import { useCallback } from 'react';
+// app/layout.tsx or pages/_app.tsx
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
+```
 
-import 'survey-core/modern.min.css';
-// import 'survey-core/defaultV2.min.css';
-import { StylesManager, Model } from 'survey-core';
+```js
+// components/Survey.tsx
+'use client'
+
+import 'survey-core/survey-core.css';
+import { useMemo, useCallback } from 'react';
+import { Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
-
-StylesManager.applyTheme("modern");
 
 const surveyJson = {
   elements: [{
@@ -251,10 +350,10 @@ const surveyJson = {
   }]
 };
 
-function App() {
-  const survey = new Model(surveyJson);
-  const alertResults = useCallback((sender) => {
-    const results = JSON.stringify(sender.data);
+export default function SurveyComponent() {
+  const survey = useMemo(() => new Model(surveyJson), [surveyJson]);
+  const alertResults = useCallback((survey: Model) => {
+    const results = JSON.stringify(survey.data);
     alert(results);
   }, []);
 
@@ -262,12 +361,22 @@ function App() {
 
   return <Survey model={survey} />;
 }
-
-export default App;
 ```
+
+```js
+// survey/page.tsx
+import SurveyComponent from '@/components/Survey';
+
+export default function Survey() {
+  return (
+    <SurveyComponent />
+  );
+}
+```
+
 </details>
 
-<a href="https://github.com/surveyjs/code-examples/tree/main/get-started-library/react" target="_blank">View full code on GitHub</a>
+[View Full Code on GitHub](https://github.com/surveyjs/code-examples/tree/main/get-started-library/react (linkStyle))
 
 ## Further Reading
 

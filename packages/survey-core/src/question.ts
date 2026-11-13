@@ -1,0 +1,4382 @@
+import { HashTable, Helpers } from "./helpers";
+import { JsonObject, Serializer } from "./jsonobject";
+import { property } from "./decorators";
+import { IElement, IQuestion, IPanel, IConditionRunner, ISurveyImpl, IPage, ITitleOwner, IProgressInfo, ISurvey, IPlainDataOptions, IDropdownMenuOptions, ISurveyElement, ISurveyAfterRenderCallbacks, ISurveyValidation, IDataVerificationOptions, IDataIssue, DataIssueType } from "./base-interfaces";
+import { Base, ComputedUpdater } from "./base";
+import { EventBase } from "./event";
+import { SurveyElement, getReadOnlyModePropertyInfo } from "./survey-element";
+import { AnswerRequiredError, CustomError } from "./error";
+import { SurveyValidator, IValidatorOwner, ValidatorRunner, AsyncElementsRunner } from "./validator";
+import { LocalizableString } from "./localizablestring";
+import { ExpressionRunner, ExpressionRunnerBase } from "./expressions/expressionRunner";
+import { QuestionCustomWidget } from "./questionCustomWidgets";
+import { CustomWidgetCollection } from "./questionCustomWidgets";
+import { settings } from "./settings";
+import { SurveyModel } from "./survey";
+import { PanelModel } from "./panel";
+import { RendererFactory } from "./rendererFactory";
+import { SurveyError } from "./survey-error";
+import { toCssClasses } from "./utils/cssClassBuilder";
+import { getElementWidth, isContainerVisible } from "./utils/dom-utils";
+import { PopupModel } from "./popup";
+import { ConsoleWarnings } from "./console-warnings";
+import { IObjectValueContext, IValueGetterContext, IValueGetterContextGetValueParams, IValueGetterInfo, IValueGetterItem, PropertyGetterContext, ValueGetter, ValueGetterContextCore, VariableGetterContext } from "./conditions/conditionProcessValue";
+import { ITheme } from "./themes";
+import { DomDocumentHelper, DomWindowHelper } from "./global_variables_utils";
+import { ITextArea, TextAreaModel } from "./utils/text-area";
+import { QuestionSingleInputSummary } from "./questionSingleInputSummary";
+import { ActionContainer } from "./actions/container";
+import { Action } from "./actions/action";
+import { QuestionSingleInputBehavior } from "./question_singleinput_behavior";
+import { isAnimationEnabled } from "./utils/reduced-motion";
+import { ArrayValueChoices, IArrayValueChoice } from "./utils/array-value-choices";
+import { Scope, ValueScope } from "./utils/scope";
+import { IKeyboardHintData, KeyboardHintModel } from "./keyboard-hints";
+import { IsTouch } from "./utils/devices";
+
+export const readOnlyViewEmptyText = "\u2014";
+
+export interface IConditionObject {
+  name: string;
+  text: string;
+  question: Question;
+  context?: Question;
+}
+
+export interface IQuestionPlainData {
+  name: string | number;
+  title: string;
+  value: any;
+  displayValue: any;
+  isNode: boolean;
+  isComment?: boolean;
+  questionType?: string;
+  data?: Array<IQuestionPlainData>;
+  getString: (val: any) => string;
+  [key: string]: any;
+}
+
+interface ITriggerExpressionInfo {
+  name: string;
+  canRun: () => boolean;
+  doComplete: (res: any, properties: HashTable<any>) => void;
+  secondName?: string;
+}
+
+export class QuestionValueGetterContext implements IValueGetterContext {
+  constructor (protected question: Question) {}
+  public getObj(): Base { return this.question; }
+  public getValue(params: IValueGetterContextGetValueParams): IValueGetterInfo {
+    const path = params.path;
+    const index = params.index;
+    const expVar = settings.expressionVariables;
+    if (params.isProperty && path.length > 1) {
+      params.path = path.slice(1);
+      params.isRoot = false;
+      if (path[0].name === expVar.self) {
+        return new PropertyGetterContext(this.question).getValue(params);
+      }
+      if (path[0].name === expVar.parent && !!this.question.parentQuestion) {
+        return new PropertyGetterContext(this.question.parentQuestion).getValue(params);
+      }
+    }
+    if (path.length === 0 || (path.length === 1 && path[0].name === expVar.self)) return this.getQuestionValue(index, params.isOriginalValue);
+    if (path.length > 1 && path[0].name === expVar.panel) {
+      params.isRoot = false;
+      const panel: any = this.question.parent;
+      if (panel && panel.isPanel) {
+        path.shift();
+        return params.isProperty ? new PropertyGetterContext(panel).getValue(params) :
+          new QuestionArrayGetterContext(panel.questions).getValue(params);
+      }
+    }
+    if (!this.question.isEmpty()) {
+      let val = this.question.value;
+      if (index >= 0) {
+        if (!Array.isArray(val || index >= val.length)) return undefined;
+        val = val[index];
+      }
+      params.isProperty = false;
+      return new VariableGetterContext(val).getValue(params);
+    }
+    return undefined;
+  }
+  getTextValue(name: string, value: any, isDisplayValue: boolean): string {
+    if (!isDisplayValue) return value;
+    return this.question.getDisplayValue(true, value);
+  }
+  getRootObj(): IObjectValueContext { return <any>this.question.data; }
+  getQuestion(): IQuestion { return this.question; }
+  private getQuestionValue(index: number, isOriginalValue?: boolean): IValueGetterInfo {
+    const q = this.question;
+    // The plain {name} exposes the unwrapped value by default (the "-unwrapped" suffix is kept for
+    // backward compatibility). The wrapped/original value - e.g. a checkbox with valuePropertyName -
+    // is used only when a consumer, such as an aggregate function, requests it via isOriginalValue.
+    const isUnwrapped = !isOriginalValue && q.hasFilteredValue;
+    let val = q.getFilteredValue(isUnwrapped);
+    if (index > -1 && Array.isArray(val)) {
+      val = index < val.length ? val[index] : undefined;
+    }
+    return { isFound: true, context: this, value: val, requireStrictCompare: q.requireStrictCompare };
+  }
+}
+export abstract class QuestionItemValueGetterContext extends ValueGetterContextCore {
+  protected abstract getIndex(): number;
+  protected abstract getQuestionData(): Question;
+  protected getValueFromBindedQuestions(path: Array<IValueGetterItem>, objValue: any): IValueGetterInfo {
+    if (typeof objValue !== "object") {
+      objValue = undefined;
+    }
+    const name = path.length === 1 ? path[0].name : "";
+    const qs = this.getQuestionsBySameValueNames();
+    for (let i = 0; i < qs.length; i++) {
+      const q = qs[i];
+      //TODO valuePropertyName
+      if (!!name && q.valuePropertyName === name && !!objValue && objValue.hasOwnProperty(name)) {
+        return { isFound: true, value: objValue[name], context: q.getValueGetterContext() };
+      }
+      const res = q.getValueGetterContext().getValue({ path, isRoot: false, index: this.getIndex(), existingObjectsOnly: this.readsExistingObjectsOnly() });
+      if (!!res && res.isFound) return res;
+    }
+    return undefined;
+  }
+  // A question bound to the same value is asked only for the objects it has (IValueGetterContextGetValueParams.existingObjectsOnly).
+  protected readsExistingObjectsOnly(): boolean {
+    return false;
+  }
+  private getQuestionsBySameValueNames(): Array<Question> {
+    const res = new Array<Question>();
+    const q = this.getQuestionData();
+    if (!q || !q.isQuestion) return res;
+    if (q.parent && q.parent.isPanel) {
+      this.fillQuestions((<PanelModel>q.parent).getQuestionsByValueName(q.getValueName()), q, res);
+    }
+    if (res.length === 0 && !!q.survey) {
+      this.fillQuestions((<any>q.survey).getQuestionsByValueName(q.getValueName()), q, res);
+    }
+    return res;
+  }
+  private fillQuestions(qs: Array<Question>, q: Question, res: Array<Question>): void {
+    if (Array.isArray(qs)) {
+      qs.forEach((question) => {
+        if (question !== q) {
+          res.push(question);
+        }
+      });
+    }
+  }
+  getRootObj(): any { return this.getQuestionData(); }
+}
+export class QuestionArrayGetterContext extends ValueGetterContextCore {
+  constructor(private questions: Array<Question>) {
+    super();
+  }
+  protected isSearchNameRevert(): boolean { return true; }
+  protected updateValueByItem(name: string, res: IValueGetterInfo): void {
+    const lowName = name.toLocaleLowerCase();
+    for (let i = 0; i < this.questions.length; i++) {
+      const q = this.questions[i];
+      const qName = q.getValueName().toLocaleLowerCase();
+      if (qName.toLocaleLowerCase() === lowName) {
+        res.isFound = true;
+        res.obj = q;
+        res.context = q.getValueGetterContext();
+        break;
+      }
+    }
+  }
+}
+
+export interface IValidationContextParams {
+  fireCallback: boolean;
+  isOnValueChanged?: boolean;
+  isOnValueChanging?: boolean;
+  focusOnFirstError?: boolean;
+  changeCurrentPage?: boolean;
+  callbackResult?: (res: boolean, element: IElement) => void;
+  /* false: the validation shows errors and changes no value. A question that pages its records
+     validates a page before the respondent leaves it; a select question would otherwise clear the
+     values that are not among its choices, and every page move would rewrite records - over a data
+     source, push them. The survey's own page and complete validation keep clearing them. */
+  clearIncorrectValues?: boolean;
+}
+
+// Everything on: the value checks run all three unless the caller turns one off.
+const allValueChecks: IDataVerificationOptions = { reportInvalidValueTypes: true, reportInvalidChoiceValues: true, reportUnknownProperties: true };
+
+// Renders a location for reading: the segments joined with ".", a number as "[n]" without a dot
+// before it. A string segment is written as is, so the result is ambiguous for a key that contains
+// "." or "["; that is why IDataIssue.path is not meant to be parsed and the context deduplicates
+// by the segments.
+export function renderDataPath(segments: Array<string | number>): string {
+  let res = "";
+  segments.forEach(segment => {
+    if (typeof segment === "number") {
+      res += "[" + segment + "]";
+    } else {
+      res += (!!res ? "." : "") + segment;
+    }
+  });
+  return res;
+}
+
+// The state of one verification walk. It is internal: the public surface is SurveyModel.setData(),
+// IDataIssue and the options. Every walk starts at the survey root. A container pushes its
+// segment(s) before walking into its nested instances and pops after, so the location of a finding
+// is state of the walk and not something a question computes by climbing its parents.
+export interface IVerifyDataContext {
+  // Fully resolved: every member is a boolean.
+  checks: IDataVerificationOptions;
+  issues: Array<IDataIssue>;
+  // Internal callers only, isValueCorrect() and clearIncorrectValues(): the walk may stop as soon
+  // as something is found. setData() never sets it.
+  stopOnFirst: boolean;
+  readonly hasIssues: boolean;
+  pushSegment(segment: string | number): void;
+  popSegment(): void;
+  // lastSegment is appended for this issue only: an unknown key, the array index of an offending item.
+  // The issue is dropped when one with the same type and segments is already in the list: two
+  // questions that share a valueName walk the same value and can find the same thing.
+  addIssue(type: DataIssueType, lastSegment: string | number | undefined, value: any, question: Question, expressionResult?: any): void;
+  // Runs func with an empty segment stack and restores the stack after it: the walk into an element
+  // whose values are root keys of the survey data (NestedElementLocation "root").
+  runWithEmptySegments(func: () => void): void;
+}
+
+// The questions of a nested element: a question, or the questions of a panel at any depth.
+export function getNestedElementQuestions(info: INestedElementInfo): Array<Question> {
+  return info.element.isPanel ? (<PanelModel>info.element).questions : [<Question>info.element];
+}
+
+// The first truthy answer of find to what a walk visits. The walk stops there.
+export function findInNestedWalk<T>(walk: (visit: NestedElementVisit) => void, find: (info: INestedElementInfo) => T): T {
+  let res: T = undefined;
+  walk((info: INestedElementInfo): boolean => {
+    res = find(info);
+    return !!res;
+  });
+  return res;
+}
+
+// The nested element instances a container question owns, see Question.forEachNestedElement().
+// Internal: not re-exported from entries/.
+// cell, detail, total: a matrix row's cell questions, its detail panel, the total row's cell questions.
+// item: the panel of a dynamic panel item. editor: a multiple text item's editor. content: the content
+// question of a custom question or the content panel of a composite. choicePanel: the panel of a choice.
+export type NestedElementRole = "cell" | "detail" | "total" | "item" | "editor" | "content" | "choicePanel";
+export type NestedElementLocation =
+  // The value is inside the container's value: container segments, then `segment` when defined,
+  // then the element's own value name. Cells, detail panels, panel items, editors, composite content.
+  | "nested"
+  // The element holds the container's own value and adds no key: the content question of a custom
+  // question (its getDataSegment() is undefined).
+  | "same"
+  // The value is a root key of the survey data: the questions of a choice panel, whose panel is bound
+  // to the survey (ChoiceItem.setPanelSurvey). Addressed from an empty segment stack.
+  | "root";
+export interface INestedElementInfo {
+  element: Question | PanelModel;
+  role: NestedElementRole;
+  // The record segment of a matrix row, the record index of a dynamic panel item; undefined otherwise.
+  segment: string | number | undefined;
+  location: NestedElementLocation;
+  // The container's own sense of visible: row.isVisible, membership in visiblePanelsCore,
+  // item.isPanelShowing. Always true for editors, content and the total row.
+  visible: boolean;
+}
+// A visitor answers true to stop the walk; a walk that takes a visitor passes that answer up.
+export type NestedElementVisit = (info: INestedElementInfo) => boolean | void;
+// "none": the items that exist; nothing is built. "rows": what the visibleRows getter gives (it
+// generates rows, drops rows hidden by rowsVisibleIf and gives nothing under isUpdateLocked); kept for
+// the callers that read visibleRows. "all": allRows with every detail panel ensured, panels.
+export type NestedWalkBuild = "none" | "rows" | "all";
+export interface INestedWalkOptions {
+  build: NestedWalkBuild;
+  // Skip children whose `visible` is false.
+  visibleOnly: boolean;
+}
+
+// Strict, never Helpers.isTwoValueEquals(): the number 0 and the string "0" are different segments.
+function isSameSegments(a: Array<string | number>, b: Array<string | number>): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index]);
+}
+
+class VerifyDataContext implements IVerifyDataContext {
+  public issues: Array<IDataIssue> = [];
+  public stopOnFirst: boolean = false;
+  private segmentsScope = new ValueScope<Array<string | number>>([]);
+  // The segments of every issue, parallel to issues. The public issue has the rendered path only,
+  // which is ambiguous; deduplication needs the unambiguous form.
+  private issueSegments: Array<Array<string | number>> = [];
+  constructor(public checks: IDataVerificationOptions) {
+  }
+  public get hasIssues(): boolean { return this.issues.length > 0; }
+  public pushSegment(segment: string | number): void {
+    this.segmentsScope.value.push(segment);
+  }
+  public popSegment(): void {
+    this.segmentsScope.value.pop();
+  }
+  public runWithEmptySegments(func: () => void): void {
+    this.segmentsScope.run([], func);
+  }
+  public addIssue(type: DataIssueType, lastSegment: string | number | undefined, value: any, question: Question, expressionResult?: any): void {
+    if (this.stopOnFirst && this.hasIssues) return;
+    const segments = this.segmentsScope.value.slice();
+    if (lastSegment !== undefined) {
+      segments.push(lastSegment);
+    }
+    if (this.issues.some((issue, index) => issue.type === type && isSameSegments(this.issueSegments[index], segments))) return;
+    const issue: IDataIssue = { type: type, path: renderDataPath(segments), value: value, question: question || undefined };
+    if (expressionResult !== undefined) {
+      issue.expressionResult = expressionResult;
+    }
+    this.issues.push(issue);
+    this.issueSegments.push(segments);
+  }
+}
+
+// The three value checks are on unless a member is set to false.
+export function createVerifyDataContext(options: IDataVerificationOptions): IVerifyDataContext {
+  const checks: IDataVerificationOptions = {
+    reportInvalidValueTypes: options?.reportInvalidValueTypes !== false,
+    reportInvalidChoiceValues: options?.reportInvalidChoiceValues !== false,
+    reportUnknownProperties: options?.reportUnknownProperties !== false
+  };
+  return new VerifyDataContext(checks);
+}
+
+export class ValidationContext extends AsyncElementsRunner {
+  private fireCallbackValue: boolean;
+  private focusOnFirstErrorValue: boolean;
+  private isOnValueChangedValue: boolean;
+  private isOnValueChangingValue: boolean;
+  private changeCurrentPage: boolean;
+  private firstErrorQuestionValue: Question;
+  private res: boolean = true;
+  private errorCountValue: number = 0;
+  private isCallbackFired: boolean;
+  private callbackResult: (res: boolean, element: IElement) => void;
+  constructor(context?: IValidationContextParams) {
+    super(() => { this.setCallbackResult(); });
+    if (!context) {
+      context = { fireCallback: true };
+    }
+    this.fireCallbackValue = context.fireCallback || false;
+    this.isOnValueChangedValue = context.isOnValueChanged || false;
+    this.isOnValueChangingValue = context.isOnValueChanging || false;
+    this.focusOnFirstErrorValue = context.focusOnFirstError || false;
+    this.callbackResult = context.callbackResult || null;
+    this.changeCurrentPage = context.changeCurrentPage || false;
+    this.clearIncorrectValuesScope = new ValueScope<boolean>(context.clearIncorrectValues !== false);
+  }
+  private clearIncorrectValuesScope: ValueScope<boolean>;
+  // A matrix with detailPanelMode "underRowSingle" sets isSingleDetailPanel for its rows; the first row
+  // whose detail panel has errors sets hideErroredPanel, so that only that panel is shown.
+  public isSingleDetailPanel?: boolean;
+  public hideErroredPanel?: boolean;
+  public get fireCallback(): boolean { return this.fireCallbackValue; }
+  public get clearIncorrectValues(): boolean { return this.clearIncorrectValuesScope.value; }
+  /* Validates a part of the elements without clearing their incorrect values, and in this context:
+     its async results, focus and callback stay the caller's. A question reads the flag when its
+     validation starts, so an async validator that settles later never clears either. */
+  public runWithoutClearingIncorrectValues<T>(func: () => T): T {
+    return this.clearIncorrectValuesScope.run(false, func);
+  }
+  public get isOnValueChanged(): boolean { return this.isOnValueChangedValue; }
+  public get isOnValueChanging(): boolean { return this.isOnValueChangingValue; }
+  // The result goes to a callback: the validation can wait for elements that answer later (addElement).
+  public get hasCallback(): boolean { return !!this.callbackResult; }
+  public get focusOnFirstError(): boolean { return this.focusOnFirstErrorValue; }
+  public get result(): boolean { return this.res; }
+  public get runningResult(): boolean {
+    return !this.res || !this.isRunning || !this.callbackResult ? this.res : undefined;
+  }
+  public setErrorElement(element: ISurveyElement, errors? : Array<SurveyError>): void {
+    if (Array.isArray(errors) && this.isWarningOnlyOrEmpty(errors)) return;
+    this.errorCountValue ++;
+    this.res = false;
+    if (!element) return;
+    if (element.isQuestion) {
+      this.setQuestionError(<Question>element);
+    } else {
+      if (element.isCollapsed) {
+        element.expand();
+      }
+    }
+  }
+  private isWarningOnlyOrEmpty(errors: Array<SurveyError>): boolean {
+    for (let i = 0; i < errors.length; i++) {
+      const er = errors[i];
+      if (er.isError && er.visible) return false;
+    }
+    return true;
+  }
+  public get firstErrorQuestion(): Question {
+    return this.firstErrorQuestionValue;
+  }
+  public get errorCount(): number { return this.errorCountValue; }
+  private setCallbackResult(): void {
+    if (this.callbackResult && !this.isCallbackFired) {
+      this.isCallbackFired = true;
+      this.callbackResult(this.res, this.firstErrorQuestion);
+    }
+  }
+  private setQuestionError(question: Question): void {
+    question.expandAllParents();
+    if (!this.firstErrorQuestionValue) {
+      this.firstErrorQuestionValue = question;
+      if (this.focusOnFirstError || this.changeCurrentPage) {
+        if (this.focusOnFirstError) {
+          question.focus(true);
+        } else {
+          const survey = question.getSurvey();
+          if (!!survey && !!question.page) {
+            survey.currentPage = question.page;
+          }
+        }
+      }
+      this.setCallbackResult();
+    }
+  }
+}
+
+// The kind of value a question stores, independent of the question type: what a consumer that
+// exchanges plain data with the survey - a JSON Schema, a text or voice interface, an AI agent -
+// has to send back. Question.getValueType() answers it, every question type for itself.
+export type QuestionValueType = "string" | "number" | "boolean" | "date" | "array" | "object";
+
+// The value type a question that stores whatever its items carry reports: the type of one of them.
+export function getScalarValueType(val: any): QuestionValueType {
+  if (typeof val === "number") return "number";
+  return typeof val === "boolean" ? "boolean" : "string";
+}
+
+/**
+ * A base class for all questions.
+ */
+export class Question extends SurveyElement<Question>
+  implements IQuestion, IConditionRunner, IValidatorOwner, ITitleOwner {
+  [index: string]: any;
+  private isCustomWidgetRequested: boolean;
+  private customWidgetValue: QuestionCustomWidget;
+  customWidgetData = { isNeedRender: true };
+  public get afterRenderCallbacks(): ISurveyAfterRenderCallbacks {
+    return this.survey as ISurveyAfterRenderCallbacks;
+  }
+  public get validationCallbacks(): ISurveyValidation {
+    return this.survey as ISurveyValidation;
+  }
+  focusCallback: () => void;
+  surveyLoadCallback: () => void;
+  displayValueCallback: (text: string) => string;
+  hasCssErrorCallback: () => boolean = (): boolean => false;
+
+  private triggersInfo: Array<ITriggerExpressionInfo> = [];
+  private defaultValueChangeScope = new ValueScope<boolean>(false);
+  // Read by name by the questions whose data is this question too (isParentChangingViaDefaultValue).
+  private get isChangingViaDefaultValue(): boolean {
+    return this.defaultValueChangeScope.value;
+  }
+  private isValueChangedDirectly: boolean;
+  valueChangedCallback: () => void;
+  commentChangedCallback: () => void;
+  localeChangedCallback: () => void;
+  validateValueCallback: () => SurveyError;
+  questionTitleTemplateCallback: () => string;
+  afterRenderQuestionCallback: (question: Question, element: any) => any;
+  valueFromDataCallback: (val: any) => any;
+  valueToDataCallback: (val: any) => any;
+  onUpdateCssClassesCallback: (css: any) => void;
+  setValueChangedDirectlyCallback: (val: boolean) => void;
+  onGetSurvey: () => ISurvey;
+  private locProcessedTitle: LocalizableString;
+  private isReadyValue: boolean = true;
+  private commentElements: Array<HTMLElement>;
+  private dependedQuestions: Array<Question> = [];
+  private commentTextAreaModelValue: TextAreaModel;
+
+  /**
+   * An event that is raised when the question's ready state has changed (expressions are evaluated, choices are loaded from a web resource specified by the `choicesByUrl` property, etc.).
+   *
+   * Parameters:
+   *
+   * - `sender`: `SurveyModel`\
+   * A survey instance that contains the question whose ready state has changed.
+   * - `options.isReady`: `boolean`\
+   * Indicates whether the question is ready.
+   * - `options.oldIsReady`: `boolean`\
+   * Indicates the previous ready state.
+   */
+  public onReadyChanged: EventBase<Question> = this.addEvent<Question>();
+
+  public isReadOnlyRenderDiv(): boolean {
+    return this.isReadOnly && settings.readOnly.commentRenderMode === "div";
+  }
+
+  protected allowMobileInDesignMode() {
+    return false;
+  }
+  public updateIsMobileFromSurvey() {
+    this.setIsMobile((<SurveyModel>this.survey)._isMobile);
+  }
+  public setIsMobile(val: boolean): void {
+    const newVal = val && (this.allowMobileInDesignMode() || !this.isDesignMode);
+    this.isMobile = newVal;
+    // Forwards the received value, not newVal: each nested question applies its own design-mode rule.
+    this.forEachNestedElement(info => getNestedElementQuestions(info).forEach(q => q.setIsMobile(val)), { build: "none", visibleOnly: false });
+  }
+  // The survey calls it on its questions when its choiceShortcutsEnabled changes; a container forwards
+  // it to the nested questions that exist, a select question updates its badge binding.
+  public onSurveyChoiceShortcutsEnabledChanged(): void {
+    this.forEachNestedElement(info => getNestedElementQuestions(info).forEach(q => q.onSurveyChoiceShortcutsEnabledChanged()), { build: "none", visibleOnly: false });
+  }
+  // The survey calls it on its questions when its dropdownLoadingComponent changes; a container forwards
+  // it to the nested questions that exist, a question with a drop-down list updates the list.
+  public onSurveyDropdownLoadingComponentChanged(): void {
+    this.forEachNestedElement(info => getNestedElementQuestions(info).forEach(q => q.onSurveyDropdownLoadingComponentChanged()), { build: "none", visibleOnly: false });
+  }
+  // The survey calls it on its questions when its single-input mode or its preview starts or ends; a
+  // container forwards it to the nested questions that exist. Not public API: the survey calls it
+  // through a cast.
+  protected onSurveySingleInputModeChanged(): void {
+    this.forEachNestedElement(info => getNestedElementQuestions(info).forEach(q => q.onSurveySingleInputModeChanged()), { build: "none", visibleOnly: false });
+  }
+  protected getIsMobile(): boolean {
+    return this._isMobile;
+  }
+  public get isMobile(): boolean {
+    return this.getIsMobile();
+  }
+  public set isMobile(val: boolean) {
+    this._isMobile = val;
+  }
+  public themeChanged(theme: ITheme): void { }
+  @property({ defaultValue: false }) private _isMobile: boolean;
+  @property() forceIsInputReadOnly: boolean;
+  public get ariaExpanded(): "true" | "false" {
+    if (this.isNewA11yStructure) {
+      return null;
+    }
+    return this.getPropertyValue("ariaExpanded");
+  }
+  public set ariaExpanded(val: "true" | "false") { this.setPropertyValue("ariaExpanded", val); }
+
+  constructor(name: string) {
+    super(name);
+    this.onCreating();
+
+    this.addExpressionProperty("visibleIf", (obj: Base, res: any) => { this.visible = res === true; }, undefined, true, () => { this.visible = true; });
+    this.addExpressionProperty("enableIf", (obj: Base, res: any) => { this.readOnly = res === false; }, undefined, true, () => { this.readOnly = false; });
+    this.addExpressionProperty("requiredIf", (obj: Base, res: any) => { this.isRequired = res === true; }, undefined, true, () => { this.isRequired = false; });
+
+    this.addTriggersInfo();
+  }
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+    if (this.isTriggerPropertyName(name)) {
+      this.notifySurveyOnTriggersChanged();
+    }
+    if (name === "validators") {
+      this.resetValidationDependencies();
+    }
+    const updateQuestionCssProps = ["readOnly", "hasVisibleErrors", "containsErrors"];
+    if (updateQuestionCssProps.indexOf(name) > -1) {
+      this.updateQuestionCss();
+    }
+    if (name === "showNumber") {
+      this.notifySurveyVisibilityChanged();
+    }
+    if (name === "no") {
+      this.resetCssTitle();
+    }
+    if (name === "width") {
+      this.updateQuestionCss();
+      if (!!this.parent) {
+        this.parent.elementWidthChanged(this);
+      }
+    }
+    if (name === "isRequired") {
+      if (!this.isRequired && this.errors.length > 0) {
+        this.validate();
+      }
+      this.onRenderedRequiredChanged();
+    }
+    if (name === "indent" || name === "rightIndent") {
+      this.resetIndents();
+    }
+    if (name === "showCommentArea" || name === "showOtherItem") {
+      this.initCommentFromSurvey();
+    }
+    if (name === "commentPlaceholder") {
+      this.resetRenderedCommentPlaceholder();
+    }
+    if (name === "_isMobile") {
+      this.onMobileChanged();
+    }
+    if (name === "colSpan") {
+      this.parent?.updateColumns();
+    }
+    if (name === "descriptionLocation") {
+      this.updateQuestionCss();
+    }
+  }
+  protected getDefaultTitle(): string { return this.name; }
+  protected createLocTitleProperty(): LocalizableString {
+    const locTitleValue = super.createLocTitleProperty();
+    locTitleValue.storeDefaultText = true;
+    locTitleValue.onGetTextCallback = (text: string, nonProcessedText?: string): string => {
+      if (!text && !nonProcessedText) {
+        text = this.getDefaultTitle();
+      }
+      if (!this.survey) return text;
+      return this.titleSettings.getUpdatedQuestionTitle(this, text);
+    };
+    this.locProcessedTitle = new LocalizableString(this, true);
+    this.locProcessedTitle.sharedData = locTitleValue;
+    return locTitleValue;
+  }
+  get locRenderedTitle(): LocalizableString {
+    return this.singleInputBehavior.getLocTitle() || this.locTitle;
+  }
+  public get commentTextAreaModel(): TextAreaModel {
+    if (!this.commentTextAreaModelValue) {
+      this.commentTextAreaModelValue = new TextAreaModel(this.getCommentTextAreaOptions());
+    }
+    return this.commentTextAreaModelValue;
+  }
+  private getCommentTextAreaOptions(): ITextArea {
+    const options: ITextArea = {
+      question: this,
+      id: () => this.commentId,
+      propertyNames: ["comment"],
+      cssClasses: () => {
+        return {
+          root: this.cssClasses.comment,
+          control: this.cssClasses.commentControl,
+          grip: this.cssClasses.commentGrip,
+          gripIconId: this.cssClasses.commentGripIconId
+        };
+      },
+      placeholder: () => this.renderedCommentPlaceholder,
+      isDisabledAttr: () => this.isInputReadOnly || false,
+      rows: () => this.commentAreaRows,
+      autoGrow: () => this.autoGrowComment,
+      maxLength: () => this.getOthersMaxLength(),
+      ariaRequired: () => this.a11y_input_ariaRequired,
+      ariaLabel: () => this.a11y_input_ariaLabel,
+      getTextValue: () => { return this.comment; },
+      onTextAreaChange: (e) => { this.onCommentChange(e); },
+      onTextAreaInput: (e) => { this.onCommentInput(e); },
+    };
+    return options;
+  }
+  public getSurvey(live: boolean = false): ISurvey {
+    if (live) {
+      return !!this.parent ? (<Base>(<any>this.parent)).getSurvey(live) : null;
+    }
+    if (!!this.onGetSurvey) return this.onGetSurvey();
+    return super.getSurvey();
+  }
+  public getValueName(): string {
+    if (!!this.valueName) return this.valueName.toString();
+    return this.name;
+  }
+  /**
+   * Specifies an object property that should store the question value.
+   *
+   * Refer to the [Merge Question Values](https://surveyjs.io/form-library/documentation/design-survey-merge-question-values) help topic for more information.
+   */
+  public get valueName(): string {
+    return this.getPropertyValue("valueName", "");
+  }
+  public set valueName(val: string) {
+    var oldValueName = this.getValueName();
+    this.setPropertyValue("valueName", val);
+    this.onValueNameChanged(oldValueName);
+  }
+  protected onValueNameChanged(oldValue: string): void {
+    if (!this.survey) return;
+    this.lifecycleCallbacks.questionRenamed(
+      this,
+      this.name,
+      !!oldValue ? oldValue : this.name
+    );
+    this.initDataFromSurvey();
+  }
+  protected onNameChanged(oldValue: string): void {
+    this.locTitle.strChanged();
+    if (!this.survey) return;
+    this.lifecycleCallbacks.questionRenamed(
+      this,
+      oldValue,
+      this.valueName ? this.valueName : oldValue
+    );
+  }
+  protected getAllChildren(): Base[] {
+    return [
+      ...super.getAllChildren(),
+      ...this.validators
+    ];
+  }
+  public get isReady(): boolean {
+    return this.isReadyValue;
+  }
+  protected onAsyncRunningChanged(): void {
+    this.updateIsReady();
+  }
+  protected ensureQuestionIsReady(): void {
+    this.displayValue;
+  }
+  public waitForQuestionIsReady(callback?: () => void): Promise<void> {
+    return new Promise((resolve: any) => {
+      this.ensureQuestionIsReady();
+      if (this.isReady) {
+        resolve();
+        if (!!callback) callback();
+      } else {
+        const readyCallback: (sender: Question, options: any) => void =
+                (_, options: any) => {
+                  if (options.isReady) {
+                    this.onReadyChanged.remove(readyCallback);
+                    resolve();
+                    if (!!callback) callback();
+                  }
+                };
+        this.onReadyChanged.add(readyCallback);
+      }
+    });
+  }
+  protected updateIsReady(): void {
+    let res = this.getIsQuestionReady();
+    if (res) {
+      const questions = this.getIsReadyDependsOn();
+      for (let i = 0; i < questions.length; i++) {
+        if (!questions[i].getIsQuestionReady()) {
+          res = false;
+          break;
+        }
+      }
+    }
+    this.setIsReady(res);
+  }
+  protected getIsQuestionReady(): boolean {
+    return !this.isAsyncExpressionRunning && this.getAreNestedQuestionsReady();
+  }
+  private getAreNestedQuestionsReady(): boolean {
+    const questions = this.getIsReadyNestedQuestions();
+    if (!Array.isArray(questions)) return true;
+    for (let i = 0; i < questions.length; i++) {
+      if (!questions[i].isReady) return false;
+    }
+    return true;
+  }
+  protected getIsReadyNestedQuestions(): Array<Question> {
+    return this.getNestedQuestions();
+  }
+  private setIsReady(val: boolean): void {
+    const oldIsReady = this.isReadyValue;
+    this.isReadyValue = val;
+    if (oldIsReady != val) {
+      this.getIsReadyDependends().forEach(q => q.updateIsReady());
+      this.onReadyChanged.fire(this, {
+        question: this,
+        isReady: val,
+        oldIsReady: oldIsReady,
+      });
+    }
+  }
+  protected getIsReadyDependsOn(): Array<Question> {
+    return this.getIsReadyDependendCore(true);
+  }
+  private getIsReadyDependends(): Array<Question> {
+    return this.getIsReadyDependendCore(false);
+  }
+  protected getDependedQuestionsByValueName(isDependOn: boolean): Array<IQuestion> {
+    return this.survey.questionsByValueName(this.getValueName());
+  }
+  private getIsReadyDependendCore(isDependOn: boolean): Array<Question> {
+    if (!this.survey) return [];
+    const questions = this.getDependedQuestionsByValueName(isDependOn);
+    const res = new Array<Question>();
+    questions.forEach(q => { if (q !== this) res.push(<Question>q); });
+    if (!isDependOn) {
+      if (this.parentQuestion) {
+        res.push(this.parentQuestion);
+      }
+      if (this.dependedQuestions.length > 0) {
+        this.dependedQuestions.forEach(q => res.push(q));
+      }
+    }
+    return res;
+  }
+  public choicesLoaded(): void { }
+  /**
+   * Returns the expected type of an answer to this question.
+   *
+   * The following table illustrates how the return value depends on the question type:
+   *
+   * | Question type | Value type(s) |
+   * | ------------- | ------------- |
+   * | Checkboxes | `"array"` |
+   * | Dropdown | `"string"` \| `"number"` \| `"boolean"` |
+   * | Dynamic Matrix | `"array"` |
+   * | Dynamic Panel | `"array"` |
+   * | Expression | `"string"` |
+   * | File Upload | `"array"` |
+   * | Image Picker | `"string"` \| `"array"` |
+   * | Long Text | `"string"` |
+   * | Multi-Select Dropdown | `"array"` |
+   * | Multi-Select Matrix | `"object"` |
+   * | Multiple Textboxes | `"object"` |
+   * | Radio Button Group | `"string"` \| `"number"` \| `"boolean"` |
+   * | Ranking | `"array"` |
+   * | Rating Scale | `"number"` \| `"string"` \| `"boolean"` |
+   * | Slider | `"number"` \| `"array"` |
+   * | Signature | `"string"` |
+   * | Single-Line Input | `"string"` \| `"number"` \| `"date"` |
+   * | Single-Select Matrix | `"object"` |
+   * | Yes/No (Boolean) | `"boolean"` \| `"string"` \| `"number"` |
+   * @hidefor QuestionImageModel, QuestionHtmlModel
+   * @since 3.1.1
+   */
+  public getValueType(): QuestionValueType {
+    return "string";
+  }
+  /**
+   * Returns `true` if the question exposes a collection of choice items that define its possible values.
+   *
+   * The following question types return `true`:
+   *
+   * - Checkboxes
+   * - Dropdown
+   * - Image Picker
+   * - Multi-Select Dropdown
+   * - Radio Button Group
+   * - Ranking
+   * - Rating Scale
+   * - Yes/No (Boolean)
+   *
+   * [Specialized questions](/form-library/documentation/customize-question-types/create-specialized-question-types) based on any of these question types also return `true`.
+   * @since 3.1.1
+   */
+  public isSelectQuestion(): boolean {
+    return false;
+  }
+  // Returns `false` when the value can only be produced through the question's own UI - a file to
+  // upload, a signature to draw, an image region to click. A consumer that renders nothing (a chat,
+  // a voice front end, an AI agent) cannot answer such a question at all.
+  public get hasPlainInput(): boolean {
+    return this.hasInput;
+  }
+  /* Whether records can be ordered by this question's value: a scalar value only. It reads
+     getValueType() on every call, so it follows a type switch (multiSelect) as it happens. Not
+     hasInput: an expression has a value to sort by although nobody types it. */
+  public get isValueSortable(): boolean {
+    const type = this.getValueType();
+    return type !== "array" && type !== "object";
+  }
+  /**
+   * Returns a page to which the question belongs and allows you to move this question to a different page.
+   */
+  public get page(): IPage {
+    if (!!this.parentQuestion) return this.parentQuestion.page;
+    return this.getPage(this.parent);
+  }
+  public set page(val: IPage) {
+    this.setPage(this.parent, val);
+  }
+  public getPanels(): Array<IPanel> {
+    return null;
+  }
+  protected getPageVisibleIndex(): number { return (<any>this.page)?.visibleIndex || -1; }
+  public delete(doDispose: boolean = true): void {
+    this.removeFromParent();
+    if (doDispose) {
+      this.dispose();
+    } else {
+      this.resetDependedQuestions();
+    }
+  }
+  protected removeFromParent(): void {
+    if (!!this.parent) {
+      this.removeSelfFromList(this.parent.elements);
+    }
+  }
+  protected addDependedQuestion(question: Question): void {
+    if (!question || this.dependedQuestions.indexOf(question) > -1) return;
+    this.dependedQuestions.push(question);
+  }
+  protected removeDependedQuestion(question: Question): void {
+    if (!question) return;
+    var index = this.dependedQuestions.indexOf(question);
+    if (index > -1) {
+      this.dependedQuestions.splice(index, 1);
+    }
+  }
+  protected updateDependedQuestions(): void {
+    for (var i = 0; i < this.dependedQuestions.length; i++) {
+      this.dependedQuestions[i].updateDependedQuestion();
+    }
+  }
+  protected updateDependedQuestion(): void { }
+  protected resetDependedQuestion(): void { }
+  private valueRevision: number = 0;
+  // Created on the first read: only a question that a choicesFromQuestion points at needs it.
+  private arrayValueChoices: ArrayValueChoices;
+  // internal: called by the questions whose choicesFromQuestion is this question (see ArrayValueChoices).
+  public getArrayValueChoices(valueField: string, textField: string): Array<IArrayValueChoice> {
+    if (!this.arrayValueChoices) {
+      this.arrayValueChoices = new ArrayValueChoices();
+    }
+    return this.arrayValueChoices.getChoices(this.value, this.valueRevision, valueField, textField);
+  }
+  public get isFlowLayout(): boolean {
+    return this.getLayoutType() === "flow";
+  }
+  public getLayoutType(): string {
+    if (!!this.parent) return this.parent.getChildrenLayoutType();
+    return "row";
+  }
+  isLayoutTypeSupported(layoutType: string): boolean {
+    return layoutType !== "flow";
+  }
+  /**
+   * Gets or sets question visibility.
+   *
+   * If you want to display or hide a question based on a condition, specify the [`visibleIf`](https://surveyjs.io/form-library/documentation/question#visibleIf) property. Refer to the following help topic for information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   * @see isVisible
+   * @see visibleIf
+   */
+  @property({ onSet: (val, obj) => {
+    obj.onVisibleChangedCore();
+    obj.notifySurveyVisibilityChanged();
+  } }) visible: boolean;
+  protected onVisibleChanged(): void {
+    const prevVal = this.getPropertyValue("isVisible");
+    this.onVisibleChangedCore();
+    const newVal = this.getPropertyValue("isVisible");
+    if (prevVal !== undefined && prevVal !== newVal) {
+      this.notifySurveyVisibilityChanged();
+    }
+  }
+  private onVisibleChangedCore(): void {
+    this.updateIsVisibleProp();
+    if (!this.isVisible && this.errors && this.errors.length > 0) {
+      this.errors = [];
+    }
+  }
+  protected notifyStateChanged(prevState: string): void {
+    super.notifyStateChanged(prevState);
+    if (this.isCollapsed) {
+      this.onHidingContent();
+    }
+  }
+  public updateElementVisibility(): void {
+    this.updateIsVisibleProp();
+  }
+  private updateIsVisibleProp(): void {
+    const prev = this.getPropertyValue("isVisible");
+    const val = this.isVisible;
+    if (prev !== val) {
+      this.setPropertyValue("isVisible", val);
+      if (!val) {
+        this.onHidingContent();
+      }
+    }
+    if (val !== this.visible && this.areInvisibleElementsShowing) {
+      this.updateQuestionCss();
+    }
+  }
+  /**
+   * Specifies whether to use display names for question values in placeholders.
+   *
+   * Default value: `true`
+   *
+   * This property applies to questions whose values are defined as objects with the `value` and `text` properties (for example, [choice items](https://surveyjs.io/form-library/documentation/questionradiogroupmodel#choices) in Radiogroup, Checkbox, and Dropdown questions).
+   *
+   * You can use question values as placeholders in the following places:
+   *
+   * - Survey element titles and descriptions
+   * - The [`html`](https://surveyjs.io/form-library/documentation/questionhtmlmodel#html) property of the [HTML](https://surveyjs.io/form-library/documentation/questionhtmlmodel) question
+   *
+   * To use a question value as a placeholder, specify the question `name` in curly brackets: `{questionName}`. Refer to the following help topic for more information: [Dynamic Texts - Question Values](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#question-values).
+   */
+  @property() useDisplayValuesInDynamicTexts: boolean;
+
+  protected getUseDisplayValuesInDynamicTexts(): boolean { return this.useDisplayValuesInDynamicTexts; }
+  /**
+   * A Boolean expression. If it evaluates to `false`, this question becomes hidden.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/implement-conditional-logic-to-change-question-visibility/ (linkStyle))
+   * @see visible
+   * @see isVisible
+   */
+  @property() visibleIf: string;
+  /**
+   * Returns `true` if the question is visible or the survey is currently in design mode.
+   *
+   * If you want to display or hide a question based on a condition, specify the [`visibleIf`](https://surveyjs.io/form-library/documentation/question#visibleIf) property. Refer to the following help topic for information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   * @see visibleIf
+   * @see visible
+   * @see isParentVisible
+   */
+  public get isVisible(): boolean {
+    if (this.survey && this.survey.areEmptyElementsHidden && this.isEmpty())
+      return false;
+    if (this.areInvisibleElementsShowing) return true;
+    return this.isVisibleCore();
+  }
+  public get isVisibleInSurvey(): boolean {
+    return this.isVisible && this.isParentVisible;
+  }
+  protected isVisibleCore(): boolean {
+    return this.visible;
+  }
+  /**
+   * Returns the visible index of the question in the survey. It can be from 0 to all visible questions count - 1
+   * The visibleIndex is -1 if the title is 'hidden' or showNumber is false
+   * @see titleLocation
+   * @see showNumber
+   */
+  public get visibleIndex(): number {
+    return this.getPropertyValue("visibleIndex", -1);
+  }
+  public onHidingContent(): void { }
+  /**
+   * Specifies whether to show a number for this question. Setting this property to `false` hides the question number from the title and excludes the question from numbering.
+   *
+   * Default value: `false` (inherited from the `SurveyModel`'s [`showQuestionNumbers`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#showQuestionNumbers) property)
+   * @see no
+   * @see showQuestionNumbers
+   * @see questionStartIndex
+   */
+  @property() showNumber: boolean;
+  /**
+   * @deprecated Use the [`showNumber`](https://surveyjs.io/form-library/documentation/api-reference/question#showNumber) property instead.
+   * @hidden
+   */
+  public get hideNumber(): boolean {
+    return !this.showNumber;
+  }
+  public set hideNumber(val: boolean) {
+    this.showNumber = !val;
+  }
+  /**
+   * Returns `true` if the question can display its title to the left of the input field.
+   * @see titleLocation
+   * @see getTitleLocation
+   * @see hasTitle
+   */
+  public get isAllowTitleLeft(): boolean {
+    return true;
+  }
+  /**
+   * Returns the question type.
+   * Possible values:
+   * - [*"boolean"*](https://surveyjs.io/Documentation/Library?id=questionbooleanmodel)
+   * - [*"checkbox"*](https://surveyjs.io/Documentation/Library?id=questioncheckboxmodel)
+   * - [*"comment"*](https://surveyjs.io/Documentation/Library?id=questioncommentmodel)
+   * - [*"dropdown"*](https://surveyjs.io/Documentation/Library?id=questiondropdownmodel)
+   * - [*"tagbox"*](https://surveyjs.io/form-library/documentation/questiontagboxmodel)
+   * - [*"expression"*](https://surveyjs.io/Documentation/Library?id=questionexpressionmodel)
+   * - [*"file"*](https://surveyjs.io/Documentation/Library?id=questionfilemodel)
+   * - [*"html"*](https://surveyjs.io/Documentation/Library?id=questionhtmlmodel)
+   * - [*"image"*](https://surveyjs.io/Documentation/Library?id=questionimagemodel)
+   * - [*"imagepicker"*](https://surveyjs.io/Documentation/Library?id=questionimagepickermodel)
+   * - [*"matrix"*](https://surveyjs.io/Documentation/Library?id=questionmatrixmodel)
+   * - [*"matrixdropdown"*](https://surveyjs.io/Documentation/Library?id=questionmatrixdropdownmodel)
+   * - [*"matrixdynamic"*](https://surveyjs.io/Documentation/Library?id=questionmatrixdynamicmodel)
+   * - [*"multipletext"*](https://surveyjs.io/Documentation/Library?id=questionmultipletextmodel)
+   * - [*"panel"*](https://surveyjs.io/Documentation/Library?id=panelmodel)
+   * - [*"paneldynamic"*](https://surveyjs.io/Documentation/Library?id=questionpaneldynamicmodel)
+   * - [*"radiogroup"*](https://surveyjs.io/Documentation/Library?id=questionradiogroupmodel)
+   * - [*"rating"*](https://surveyjs.io/Documentation/Library?id=questionratingmodel)
+   * - [*"ranking"*](https://surveyjs.io/Documentation/Library?id=questionrankingmodel)
+   * - [*"signaturepad"*](https://surveyjs.io/Documentation/Library?id=questionsignaturepadmodel)
+   * - [*"text"*](https://surveyjs.io/Documentation/Library?id=questiontextmodel)
+   */
+  public getType(): string {
+    return "question";
+  }
+  public get isQuestion(): boolean {
+    return true;
+  }
+  public getOwner() {
+    return this.parentQuestion || this.parent;
+  }
+  public moveTo(container: IPanel, insertBefore: any = null): boolean {
+    return this.moveToBase(this.parent, container, insertBefore);
+  }
+  public getProgressInfo(): IProgressInfo {
+    if (!this.hasInput) return super.getProgressInfo();
+    return {
+      questionCount: 1,
+      answeredQuestionCount: !this.isEmpty() ? 1 : 0,
+      requiredQuestionCount: this.isRequired ? 1 : 0,
+      requiredAnsweredQuestionCount: !this.isEmpty() && this.isRequired ? 1 : 0,
+    };
+  }
+  private runTriggerInfo(info: ITriggerExpressionInfo, keys: any, properties: any): void {
+    this.runExpressionByProperty(info.name, properties, (value: any) => {
+      info.doComplete(value, properties);
+    }, (runner: ExpressionRunner): boolean => {
+      if (!info.canRun()) return false;
+      return !keys || this.canExecuteTriggerByKeys(keys, runner, this.getExpressionByProperty(info.secondName));
+    });
+  }
+  private canExecuteTriggerByKeys(keys: any, runner: ExpressionRunner, secondRunner?: ExpressionRunner): boolean {
+    if (!runner && !!secondRunner) {
+      runner = secondRunner;
+      secondRunner = undefined;
+    }
+    const run1 = this.canExecuteTriggerByKeysCore(keys, runner);
+    if (run1 === "var") return true;
+    if (!secondRunner) return run1 === "func" || run1 === "const";
+    const run2 = this.canExecuteTriggerByKeysCore(keys, secondRunner);
+    return run2 !== "";
+  }
+  private canExecuteTriggerByKeysCore(keys: any, runner: ExpressionRunner): string {
+    if (!runner.expression) return "";
+    if (runner.hasFunction(true)) return "func";
+    const vars = runner.getVariables();
+    if ((!Array.isArray(vars) || vars.length === 0)) return "const";
+    return new ValueGetter().isAnyKeyChanged(keys, vars, undefined, runner.getVariablesInfo(), this.getSurveyVariableNamesInfo()) ? "var" : "";
+  }
+  // Whether an item condition of this question (a choice, row or column visibleIf / enableIf) may keep
+  // its last result in the current value-change run. It follows the element rule, with one difference:
+  // a path under a cleared value ({m.r1} once m is cleared) counts as changed, since an item condition
+  // writes no value back. The item names resolve inside this question's value first ({r1} in a matrix
+  // row reads row r1), so a change of the value, or of any container that holds it, runs them all.
+  public canSkipItemCondition(runner: ExpressionRunnerBase): boolean {
+    const survey: any = this.getSurvey();
+    const keys = !!survey && typeof survey.getValueChangedKeys === "function" ? survey.getValueChangedKeys() : undefined;
+    if (!keys || this.isOwnOrContainerValueChanged(keys, survey)) return false;
+    return this.canSkipExpressionByKeys(runner, keys, undefined, true);
+  }
+  // A change inside a dynamic panel or a composite question reports the container's name only
+  private isOwnOrContainerValueChanged(keys: any, survey: any): boolean {
+    const lowerKeys: HashTable<boolean> = Object.create(null);
+    for (const key in keys) {
+      lowerKeys[key.toLowerCase()] = true;
+    }
+    let question: Question = this;
+    while(!!question) {
+      const valueName = question.getValueName();
+      if (!!valueName && lowerKeys[valueName.toLowerCase()]) return true;
+      let data: any = question.data;
+      // A dynamic panel item or a matrix row hands over to the question that holds it. The walk stops
+      // at the survey: its data getter builds the whole result object.
+      if (!!data && data !== survey && !(data instanceof Question) && data.data instanceof Question) {
+        data = data.data;
+      }
+      question = data instanceof Question && data !== question ? data : undefined;
+    }
+    return false;
+  }
+  public getValueGetterContext(): IValueGetterContext {
+    return new QuestionValueGetterContext(this);
+  }
+  private addTriggersInfo(): void {
+    this.addTriggerInfo({
+      name: "resetValueIf",
+      canRun: (): boolean => !this.isEmpty(),
+      doComplete: (res: any, properties: HashTable<any>): void => {
+        if (res === true) {
+          this.startSetValueOnExpression();
+          try {
+            this.updateValueWithDefaultsOrClear();
+          } finally {
+            this.finishSetValueOnExpression();
+          }
+        }
+      }
+    });
+    this.addTriggerInfo({
+      name: "setValueIf",
+      secondName: "setValueExpression",
+      canRun: (): boolean => true,
+      doComplete: (res: any, properties: HashTable<any>): void => {
+        if (res) {
+          if (!this.setValueExpression) {
+            this.clearValue();
+          } else {
+            const info = {
+              name: "setValueExpression",
+              canRun: (): boolean => true,
+              doComplete: (res: any, properties: HashTable<any>): void => this.runExpressionSetValue(res)
+            };
+            this.runTriggerInfo(info, undefined, properties);
+          }
+        }
+      }
+    });
+    this.addTriggerInfo({
+      name: "setValueExpression",
+      canRun: (): boolean => !this.setValueIf,
+      doComplete: (res: any, properties: HashTable<any>): void => this.runExpressionSetValue(res)
+    });
+  }
+  protected addTriggerInfo(info: ITriggerExpressionInfo): void {
+    this.triggersInfo.push(info);
+    this.notifySurveyOnTriggersChanged();
+  }
+  // The survey walks only the questions that answer true (SurveyModel.runQuestionsTriggers): a trigger
+  // whose property is empty runs nothing. A question that forwards triggers to nested questions overrides it.
+  public canRunTriggers(): boolean {
+    for (let i = 0; i < this.triggersInfo.length; i++) {
+      const info = this.triggersInfo[i];
+      if (!!this[info.name] || !!info.secondName && !!this[info.secondName]) return true;
+    }
+    return false;
+  }
+  private isTriggerPropertyName(name: string): boolean {
+    // Properties change in the base constructors, before the trigger infos exist
+    if (!this.triggersInfo) return false;
+    for (let i = 0; i < this.triggersInfo.length; i++) {
+      const info = this.triggersInfo[i];
+      if (info.name === name || info.secondName === name) return true;
+    }
+    return false;
+  }
+  private notifySurveyOnTriggersChanged(): void {
+    if (!!this.survey && !this.parentQuestion) {
+      this.lifecycleCallbacks.questionTriggersChanged();
+    }
+  }
+  public runTriggers(name: string, value: any, keys?: any): void {
+    if (this.isSettingQuestionValue || (this.parentQuestion && this.parentQuestion.getValueName() === name)) return;
+    if (!keys) {
+      keys = {};
+      keys[name] = value;
+    }
+    const properties = this.getDataFilteredProperties();
+    this.triggersInfo.forEach(info => {
+      this.runTriggerInfo(info, keys, properties);
+    });
+  }
+  private runConditions() {
+    if (this.data && !this.isLoadingFromJson) {
+      if (!this.isDesignMode) {
+        this.runCondition(this.getDataFilteredProperties());
+      }
+      this.locStrsChanged();
+    }
+  }
+  public setSurveyImpl(value: ISurveyImpl, isLight?: boolean): void {
+    super.setSurveyImpl(value);
+    if (!this.survey) return;
+    this.lifecycleCallbacks.questionCreated(this);
+    if (isLight !== true) {
+      this.runConditions();
+    }
+    if (!this.visible) {
+      this.updateIsVisibleProp();
+    }
+    this.updateIsMobileFromSurvey();
+  }
+  /**
+   * Returns a survey element (panel or page) that contains the question and allows you to move this question to a different survey element.
+   */
+  public get parent(): IPanel {
+    return this.getPropertyValue("parent", null);
+  }
+  public set parent(val: IPanel) {
+    if (this.parent === val) return;
+    this.removeFromParent();
+    this.setPropertyValue("parent", val);
+    if (!!val) {
+      this.updateQuestionCss();
+    }
+    this.onParentChanged();
+  }
+  protected onParentChanged(): void { }
+  // The survey switched design mode at runtime (SurveyModel.setDesignMode).
+  public onDesignModeChanged(): void { }
+  //#region singleInput - delegated to singleInputBehavior
+  private _singleInputBehavior: QuestionSingleInputBehavior;
+  public get singleInputBehavior(): QuestionSingleInputBehavior {
+    if (!this._singleInputBehavior) {
+      this._singleInputBehavior = this.createSingleInputBehavior();
+    }
+    return this._singleInputBehavior;
+  }
+  protected createSingleInputBehavior(): QuestionSingleInputBehavior {
+    return new QuestionSingleInputBehavior(this);
+  }
+  public get singleInputQuestion(): Question {
+    const res = this.singleInputBehavior.singleInputQuestion;
+    // A stored "self" that cannot be a summary step is a question at its own step (a select question with
+    // nested choice elements before its nested inputs): render the question's own content.
+    // canShowSelfAsSummary() is private to the behavior, not public API. It answers without building
+    // singleInputSummary, which would re-enter this getter for a dynamic container nested in another one.
+    if (res === this && !(<any>this.singleInputBehavior).canShowSelfAsSummary()) return undefined;
+    return res;
+  }
+  public get singleInputSummary(): QuestionSingleInputSummary {
+    return this.singleInputBehavior.singleInputSummary;
+  }
+  public get rootParentQuestion(): Question {
+    let res: Question = this;
+    while(!!res.parentQuestion) {
+      res = res.parentQuestion;
+    }
+    return res;
+  }
+  public resetSingleInput(): void {
+    this.singleInputBehavior.resetSingleInput();
+  }
+  public validateSingleInput(): boolean {
+    return this.singleInputBehavior.validateSingleInput();
+  }
+  public getSingleInputElementPos(): number {
+    return this.singleInputBehavior.getSingleInputElementPos();
+  }
+  public getProgressStepCount(): number {
+    return this.singleInputBehavior.getProgressStepCount();
+  }
+  public getProgressStepIndex(): number {
+    return this.singleInputBehavior.getProgressStepIndex();
+  }
+  public resetSurveyProgressTotal(): void {
+    (<SurveyModel>this.survey)?.resetProgressTotal();
+  }
+  protected get isSingleInputActive(): boolean {
+    return this.singleInputBehavior.isSingleInputActive;
+  }
+  protected singleInputOnAddItem(isOnDataChanging: boolean): void {
+    this.singleInputBehavior.singleInputOnAddItem(isOnDataChanging);
+  }
+  protected singleInputOnRemoveItem(index: number): void {
+    this.singleInputBehavior.singleInputOnRemoveItem(index);
+  }
+  public onSetAsSingleInput(): void {
+    this.singleInputBehavior.onSetAsSingleInput();
+  }
+  public nextSingleInput(): boolean {
+    return this.singleInputBehavior.nextSingleInput();
+  }
+  public prevSingleInput(): boolean {
+    return this.singleInputBehavior.prevSingleInput();
+  }
+  public getSingleInputAddText(): string {
+    return this.singleInputBehavior.getSingleInputAddText();
+  }
+  public singleInputAddItem(checkErrors?: boolean): void {
+    this.singleInputBehavior.singleInputAddItem(checkErrors);
+  }
+  public get singleInputLocTitle(): LocalizableString {
+    return this.singleInputBehavior.singleInputLocTitle;
+  }
+  public get singleInputActions(): ActionContainer {
+    return this.singleInputBehavior.singleInputActions;
+  }
+  public get singleInputHasActions(): boolean {
+    return this.singleInputBehavior.singleInputHasActions;
+  }
+  //#endregion
+  /**
+   * Returns `false` if the `titleLocation` property is set to `"hidden"` or if the question cannot have a title (for example, an [HTML](https://surveyjs.io/form-library/documentation/questionhtmlmodel) question).
+   *
+   * If the `title` property is `undefined` or set to an empty string, the `hasTitle` property returns `true`, because the question uses its `name` as a title in this case.
+   * @see title
+   * @see titleLocation
+   */
+  public get hasTitle(): boolean {
+    return this.getTitleLocation() !== "hidden" && !this.singleInputBehavior.singleInputHideHeader;
+  }
+  /**
+   * Sets question title location relative to the input field. Overrides the `questionTitleLocation` property specified for the question's container (survey, page, or panel).
+   *
+   * Possible values:
+   *
+   * - `"default"` (default) - Inherits the setting from the `questionTitleLocation` property specified for the question's container.
+   * - `"top"` - Displays the title above the input field.
+   * - `"bottom"` - Displays the title below the input field.
+   * - `"left"` - Displays the title to the left of the input field.
+   * - `"hidden"` - Hides the question title.
+   *
+   * > Certain question types (Matrix, Multiple Text) do not support the `"left"` value. For them, the `"top"` value is used.
+   * @see SurveyModel.questionTitleLocation
+   * @see getTitleLocation
+   * @see isAllowTitleLeft
+   */
+  public get titleLocation(): string {
+    return this.getPropertyValue("titleLocation");
+  }
+  public set titleLocation(value: string) {
+    var isVisibilityChanged =
+      this.titleLocation == "hidden" || value == "hidden";
+    this.setPropertyValue("titleLocation", value.toLowerCase());
+    this.updateQuestionCss();
+    if (isVisibilityChanged) {
+      this.notifySurveyVisibilityChanged();
+    }
+  }
+  get showTitle(): boolean {
+    return this.getTitleLocation() !== "hidden";
+  }
+  set showTitle(newValue: boolean) {
+    this.titleLocation = newValue ? "default" : "hidden";
+  }
+  public getTitleOwner(): ITitleOwner { return this; }
+  protected getIsTitleRenderedAsString(): boolean { return this.titleLocation === "hidden"; }
+  protected notifySurveyOnChildrenVisibilityChanged(): boolean { return false; }
+  /* A records question builds objects for records its value already holds - a page move, a view
+     rebuild: their questions write no static default into a record, and a question their first
+     conditions hide keeps its answer, as for the objects built while the survey loads its data. */
+  protected isBuildingChildrenForStoredRecords(): boolean { return false; }
+  private notifySurveyVisibilityChanged(): void {
+    if (!this.canUpdateValueOnVisibleChanged()) return;
+    this.lifecycleCallbacks.questionVisibilityChanged(this, this.isVisible,
+      !this.parentQuestion || this.parentQuestion.notifySurveyOnChildrenVisibilityChanged());
+    const isClearOnHidden = this.isClearValueOnHidden;
+    if (!this.visible && !this.parentQuestion?.isBuildingChildrenForStoredRecords()) {
+      this.clearValueOnHidding(isClearOnHidden);
+    }
+    if (isClearOnHidden && this.isVisibleInSurvey) {
+      this.updateValueWithDefaults();
+    }
+  }
+  protected clearValueOnHidding(isClearOnHidden: boolean): void {
+    if (isClearOnHidden) {
+      this.clearValueIfInvisible();
+    }
+  }
+  public get titleWidth(): string {
+    if (this.parent && this.getTitleLocation() === "left") {
+      const columns = this.parent.getColumsForElement(this as any);
+      const columnCount = columns.length;
+      if (columnCount !== 0 && !!columns[0].questionTitleWidth) return columns[0].questionTitleWidth;
+      const questionWidth = this.getQuestionParentTitleWidth();
+      const percentWidth = this.getPercentQuestionTitleWidth(questionWidth);
+      if (!percentWidth && !!this.parent) {
+        let width = questionWidth;
+        if (width && !isNaN(width)) width = width + "px";
+        return width;
+      }
+      return (percentWidth / (columnCount || 1)) + "%";
+    }
+    return undefined;
+  }
+  private getQuestionParentTitleWidth(): any {
+    if (!this.parent) return undefined;
+    const res = this.parent.getQuestionTitleWidth();
+    if (!res && !!this.parentQuestion) return this.parentQuestion.getQuestionParentTitleWidth();
+    return res;
+  }
+  private getPercentQuestionTitleWidth(width: any): number {
+    if (!!width && width[width.length - 1] === "%") {
+      return parseInt(width);
+
+    }
+    return undefined;
+  }
+  /**
+   * Returns title location calculated based on the question's `titleLocation` property and the `questionTitleLocation` property of the question's containers (survey, page, or panel).
+   * @see titleLocation
+   * @see SurveyModel.questionTitleLocation
+   */
+  public getTitleLocation(): string {
+    if (this.isFlowLayout) return "hidden";
+    var location = this.getTitleLocationCore();
+    if (location === "left" && !this.isAllowTitleLeft) location = "top";
+    return location;
+  }
+  protected getTitleLocationCore(): string {
+    if (this.titleLocation !== "default") return this.titleLocation;
+    return this.getParentTitleLocation();
+  }
+  protected getParentTitleLocation(): string {
+    if (!!this.parent) return this.parent.getQuestionTitleLocation();
+    if (!!this.survey) return this.titleSettings.questionTitleLocation;
+    return "top";
+  }
+  get hasTitleOnLeft(): boolean {
+    return this.hasTitle && this.getTitleLocation() === "left";
+  }
+  get hasTitleOnTop(): boolean {
+    return this.hasTitle && this.getTitleLocation() === "top";
+  }
+  get hasTitleOnBottom(): boolean {
+    return this.hasTitle && this.getTitleLocation() === "bottom";
+  }
+  get hasTitleOnLeftTop(): boolean {
+    if (!this.hasTitle) return false;
+    const location = this.getTitleLocation();
+    return location === "left" || location === "top";
+  }
+  /**
+   * Specifies the error message position. Overrides the `questionErrorLocation` property specified for the question's container ([survey](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#questionErrorLocation), [page](https://surveyjs.io/form-library/documentation/api-reference/page-model#questionErrorLocation), or [panel](https://surveyjs.io/form-library/documentation/api-reference/panel-model#questionErrorLocation)).
+   *
+   * Possible values:
+   *
+   * - `"default"` (default) - Inherits the setting from the `questionErrorLocation` property specified for the question's container.
+   * - `"top"` - Displays error messages above questions.
+   * - `"bottom"` - Displays error messages below questions.
+   */
+  @property() errorLocation: string;
+  public getErrorLocation(): string {
+    if (this.errorLocation !== "default") return this.errorLocation;
+    if (this.parentQuestion) return this.parentQuestion.getChildErrorLocation(this);
+    if (this.parent) return this.parent.getQuestionErrorLocation();
+    return this.survey ? this.titleSettings.questionErrorLocation : "top";
+  }
+  public getChildErrorLocation(child: Question): string {
+    return this.getErrorLocation();
+  }
+  /**
+   * Returns `false` if the question has no input fields ([HTML](https://surveyjs.io/form-library/documentation/questionhtmlmodel), [Image](https://surveyjs.io/form-library/documentation/questionimagemodel), and similar question types).
+   * @see hasSingleInput
+   */
+  public get hasInput(): boolean {
+    return true;
+  }
+  /**
+   * Returns `false` if the question has no input fields ([HTML](https://surveyjs.io/form-library/documentation/questionhtmlmodel), [Image](https://surveyjs.io/form-library/documentation/questionimagemodel)) or has multiple input fields ([Matrix](https://surveyjs.io/form-library/documentation/questionmatrixmodel), [Multiple Text](https://surveyjs.io/form-library/documentation/questionmultipletextmodel)).
+   * @see hasInput
+   */
+  public get hasSingleInput(): boolean {
+    return this.hasInput && !this.isContainer;
+  }
+  public get inputId(): string {
+    return this.renderedId + "i";
+  }
+  protected getDefaultTitleValue(): string { return this.name; }
+  protected getDefaultTitleTagName(): string {
+    return settings.titleTags.question;
+  }
+  /**
+   * Specifies where to display a question description.
+   *
+   * Possible values:
+   *
+   * - `"default"` (default) - Inherits the setting from the Survey's [`questionDescriptionLocation`](https://surveyjs.io/form-library/documentation/surveymodel#questionDescriptionLocation) property.
+   * - `"underTitle"` - Displays the description under the question title.
+   * - `"underInput"` - Displays the description under the interactive area.
+   * - `"hidden"` - Hides the description.
+   * @see description
+   * @see hasDescription
+   */
+  @property() descriptionLocation: string;
+
+  get hasDescriptionUnderTitle(): boolean {
+    return this.getDescriptionLocation() == "underTitle" && this.hasDescription;
+  }
+  get hasDescriptionUnderInput(): boolean {
+    return this.getDescriptionLocation() == "underInput" && this.hasDescription;
+  }
+  protected getDescriptionLocation() {
+    if (this.descriptionLocation !== "default") return this.descriptionLocation;
+    return !!this.survey
+      ? this.titleSettings.questionDescriptionLocation
+      : "underTitle";
+  }
+  protected needClickTitleFunction(): boolean {
+    return super.needClickTitleFunction() || this.hasInput;
+  }
+  protected processTitleClick() {
+    super.processTitleClick();
+    if (this.isCollapsed) return;
+    setTimeout(() => {
+      this.focus();
+    }, 1);
+    return true;
+  }
+  /**
+   * Specifies a custom error message for a required form field.
+   * @see isRequired
+   */
+  @property({ localizable: true }) requiredErrorText: string;
+  declare readonly locRequiredErrorText: LocalizableString;
+  /**
+   * Specifies a caption displayed above the comment area. Applies when the `showCommentArea` property is `true`.
+   * @see showCommentArea
+   * @see comment
+   */
+  @property({ localizable: { defaultStr: true, markdown: true } }) commentText: string;
+  /**
+   * A placeholder for the comment area. Applies when the `showCommentArea` property is `true`.
+   * @see showCommentArea
+   * @see comment
+   * @see commentText
+   */
+  @property({ localizable: true }) commentPlaceholder: string;
+  public get commentPlaceHolder(): string {
+    return this.commentPlaceholder;
+  }
+  public set commentPlaceHolder(newValue: string) {
+    this.commentPlaceholder = newValue;
+  }
+  public get renderedCommentPlaceholder(): string {
+    return this.getPropertyValue("renderedCommentPlaceholder") ?? (!this.isReadOnly ? this.commentPlaceholder : undefined);
+  }
+  private resetRenderedCommentPlaceholder() {
+    this.resetPropertyValue("renderedCommentPlaceholder");
+  }
+  /**
+   * A value to show in HTML questions and in the dynamic titles and descriptions of survey elements when the question value is [empty](#isValueEmpty).
+   *
+   * Default value: `""`
+   *
+   * [Dynamic Texts](https://surveyjs.io/form-library/documentation/design-survey/conditional-logic#dynamic-texts (linkStyle))
+   * @since 2.0.0
+   */
+  @property({ localizable: true }) defaultDisplayValue: string;
+  declare readonly locDefaultDisplayValue: LocalizableString;
+
+  public getAllErrors(): Array<SurveyError> {
+    return this.errors.slice();
+  }
+  public getErrorByType(errorType: string): SurveyError {
+    for (let i = 0; i < this.errors.length; i++) {
+      if (this.errors[i].getErrorType() === errorType) return this.errors[i];
+    }
+    return null;
+  }
+  public get customWidget(): QuestionCustomWidget {
+    if (!this.isCustomWidgetRequested && !this.customWidgetValue) {
+      this.isCustomWidgetRequested = true;
+      this.updateCustomWidget();
+    }
+    return this.customWidgetValue;
+  }
+  public updateCustomWidget(): void {
+    this.customWidgetValue = CustomWidgetCollection.Instance.getCustomWidget(this);
+  }
+  public localeChanged(): void {
+    super.localeChanged();
+    this.resetRenderedCommentPlaceholder();
+    if (!!this.localeChangedCallback) {
+      this.localeChangedCallback();
+    }
+  }
+  public get isContainer(): boolean { return false; }
+  // A container that keeps the saved masked text of its nested question on a locale change (QuestionTextModel.localeChanged).
+  protected keepsSavedTextOnLocaleChange(question: Question): boolean { return false; }
+  // At any depth: through dynamic panels, composites and custom questions, whose content has no parentQuestion.
+  protected get isSavedTextKeptOnLocaleChange(): boolean {
+    for (let q: Question = this; !!q; q = q.parentQuestion || q.getCustomQuestionWrapper()) {
+      if (!!q.parentQuestion && q.parentQuestion.keepsSavedTextOnLocaleChange(q)) return true;
+    }
+    return false;
+  }
+  public onCommentInput(event: any): void {
+    if (this.isInputTextUpdate) {
+      if (event.target) {
+        this.comment = event.target.value;
+      }
+    }
+  }
+  public onCommentChange(event: any): void {
+    this.comment = event.target.value;
+    if (this.comment !== event.target.value) {
+      event.target.value = this.comment;
+    }
+  }
+
+  protected contentElement: HTMLElement;
+  public afterRenderQuestionElement(el: HTMLElement): void {
+    this.contentElement = el;
+    if (!this.survey || !this.hasSingleInput) return;
+    this.afterRenderCallbacks.afterRenderQuestionInput(this, el);
+  }
+  public afterRender(el: HTMLElement): void {
+    this.afterRenderCore(el);
+    if (!this.survey) return;
+    this.afterRenderCallbacks.afterRenderQuestion(this, el);
+    if (!!this.afterRenderQuestionCallback) {
+      this.afterRenderQuestionCallback(this, el);
+    }
+
+    if (this.supportComment() || this.supportOther()) {
+      this.commentElements = [];
+      this.getCommentElementsId().forEach(id => {
+        const commentEl = el?.querySelector(`#${id}`);
+        if (commentEl)this.commentElements.push(commentEl as HTMLElement);
+      });
+    }
+    this.checkForResponsiveness(el);
+  }
+  public beforeDestroy(): void {
+    super.beforeDestroy();
+    this.destroyResizeObserver();
+  }
+  public afterRenderCore(element: HTMLElement): void {
+    super.afterRenderCore(element);
+  }
+  protected getCommentElementsId(): Array<string> {
+    return [this.commentId];
+  }
+  public beforeDestroyQuestionElement(el: HTMLElement): void {
+    this.contentElement = undefined;
+    this.commentElements = undefined;
+  }
+  public get processedTitle(): string {
+    var res = this.locProcessedTitle.textOrHtml;
+    return res ? res : this.name;
+  }
+  public get fullTitle(): string {
+    return this.locTitle.renderedHtml;
+  }
+  protected get titlePattern(): string {
+    return !!this.survey ? this.titleSettings.questionTitlePattern : "numTitleRequire";
+  }
+  // Whether the question renders as required: the required mark, the required CSS classes and aria-required.
+  // It is isRequired, except for a question type that requires a specific answer (boolean requireTrue).
+  public get isRenderedRequired(): boolean {
+    return this.isRequired;
+  }
+  // The title text and the CSS classes are cached: a change of isRenderedRequired renews them.
+  protected onRenderedRequiredChanged(): void {
+    this.locTitle.strChanged();
+    this.clearCssClasses();
+  }
+  public get isRequireTextOnStart(): boolean {
+    return this.isRenderedRequired && this.titlePattern == "requireNumTitle";
+  }
+  public get isRequireTextBeforeTitle(): boolean {
+    return this.isRenderedRequired && this.titlePattern == "numRequireTitle" && this.requiredMark !== "";
+  }
+  public get isRequireTextAfterTitle(): boolean {
+    return this.isRenderedRequired && this.titlePattern == "numTitleRequire" && this.requiredMark !== "";
+  }
+  /**
+   * Disable this property if you want to render the current question on the same line or row with the previous question or panel.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/arrange-multiple-questions-in-single-line/ (linkStyle))
+   */
+  @property() startWithNewLine: boolean;
+  protected calcCssClasses(css: any): any {
+    const classes = { error: {} };
+    this.copyCssClasses(classes, css.question);
+    this.copyCssClasses(classes.error, css.error);
+    this.updateCssClasses(classes, css);
+    return classes;
+  }
+  protected onCalcCssClasses(classes: any): void {
+    super.onCalcCssClasses(classes);
+    if (this.survey) {
+      this.cssCallbacks.updateQuestionCssClasses(this, classes);
+    }
+    if (this.onUpdateCssClassesCallback) {
+      this.onUpdateCssClassesCallback(classes);
+    }
+  }
+  public get cssRoot(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssRoot", "");
+  }
+  protected setCssRoot(val: string): void {
+    this.setPropertyValue("cssRoot", val);
+  }
+  protected getCssRoot(cssClasses: { [index: string]: string }): string {
+    const hasError = this.hasCssError(true);
+    return toCssClasses(
+      super.getCssRoot(cssClasses),
+      this.isFlowLayout && !this.isDesignMode ? cssClasses.flowRoot : cssClasses.mainRoot,
+      !this.isFlowLayout && this.hasTitleOnLeft && cssClasses.titleLeftRoot,
+      !this.isFlowLayout && this.hasTitleOnTop && cssClasses.titleTopRoot,
+      !this.isFlowLayout && this.hasTitleOnBottom && cssClasses.titleBottomRoot,
+      !this.isFlowLayout && this.hasDescriptionUnderInput && cssClasses.descriptionUnderInputRoot,
+      hasError && cssClasses.hasError,
+      hasError && this.getErrorLocation() == "top" && cssClasses.hasErrorTop,
+      hasError && this.getErrorLocation() == "bottom" && cssClasses.hasErrorBottom,
+      !this.width && cssClasses.small,
+      this.isAnswered && cssClasses.answered,
+      this.isReadOnlyAttr && cssClasses.noPointerEventsMode
+    );
+  }
+  public get cssHeader(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssHeader", "");
+  }
+  protected setCssHeader(val: string): void {
+    this.setPropertyValue("cssHeader", val);
+  }
+  protected getCssHeader(cssClasses: any): string {
+    return toCssClasses(
+      super.getCssHeader(cssClasses),
+      this.hasTitleOnTop && cssClasses.headerTop,
+      this.hasTitleOnLeft && cssClasses.headerLeft,
+      this.hasTitleOnBottom && cssClasses.headerBottom
+    );
+  }
+  protected supportContainerQueries() {
+    return false;
+  }
+  public get cssContent(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssContent", "");
+  }
+  protected setCssContent(val: string): void {
+    this.setPropertyValue("cssContent", val);
+  }
+  protected getCssContent(cssClasses: any): string {
+    return toCssClasses(
+      cssClasses.content,
+      (this.state !== "default") && cssClasses.expandableContent,
+      this.supportContainerQueries() && cssClasses.contentSupportContainerQueries,
+      this.hasTitleOnLeft && cssClasses.contentLeft
+    );
+  }
+  public get cssTitle(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssTitle", undefined, () => {
+      return this.getCssTitle(this.getCssClasses());
+    });
+  }
+  private resetCssTitle() {
+    this.resetPropertyValue("cssTitle");
+  }
+  protected getCssTitle(cssClasses: any): string {
+    return toCssClasses(
+      super.getCssTitle(cssClasses),
+      !!this.singleInputQuestion && cssClasses.singleInputTitle,
+      !this.containsErrors && this.isAnswered && cssClasses.titleOnAnswer,
+      !this.title.trim() && cssClasses.titleEmpty
+    );
+  }
+  public get cssDescription(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssDescription", "");
+  }
+  protected setCssDescription(val: string): void {
+    this.setPropertyValue("cssDescription", val);
+  }
+  protected getCssDescription(cssClasses: any): string {
+    return toCssClasses(cssClasses.description, this.getDescriptionLocation() == "underInput" && cssClasses.descriptionUnderInput);
+  }
+  public get showErrorsAboveQuestion(): boolean {
+    return this.getErrorLocation() === "top";
+  }
+  public get showErrorsBelowQuestion(): boolean {
+    return this.getErrorLocation() === "bottom";
+  }
+
+  public get cssError(): string {
+    this.ensureElementCss();
+    return this.getPropertyValue("cssError", "");
+  }
+  protected setCssError(val: string): void {
+    this.setPropertyValue("cssError", val);
+  }
+  protected getCssError(cssClasses: any): string {
+    return toCssClasses(
+      cssClasses.error.root,
+      this.currentNotificationType === "warning" && cssClasses.error.warningMode,
+      this.currentNotificationType === "info" && cssClasses.error.infoMode,
+      cssClasses.errorsContainer,
+      this.showErrorsAboveQuestion && cssClasses.errorsContainerTop,
+      this.showErrorsBelowQuestion && cssClasses.errorsContainerBottom
+    );
+  }
+  protected hasCssError(includeWarning?: boolean): boolean {
+    const erros = this.errors;
+    for (let i = 0; i < erros.length; i++) {
+      const er = erros[i];
+      if (er.visible && (includeWarning || er.isError)) return true;
+    }
+    return this.hasCssErrorCallback();
+  }
+  protected updateVisibleErrors() {
+    super.updateVisibleErrors();
+    this.updateQuestionCss();
+  }
+  private get isSingleInputQuestionMode(): boolean {
+    return !!this.parentQuestion && this.isSingleInputMode;
+  }
+  protected getIsNested(): boolean {
+    if (!!this.isSingleInputQuestionMode) return false;
+    return super.getIsNested();
+  }
+  protected getHasFrameV2(): boolean {
+    if (this.isSingleInputQuestionMode) return true;
+    return super.getHasFrameV2();
+  }
+  public getRootCss(): string {
+    return toCssClasses(
+      !this.singleInputQuestion && this.cssRoot,
+      !!this.singleInputQuestion && this.cssClasses.rootSingleInput,
+      this.isMobile && this.cssClasses.mobile,
+      this.isReadOnlyStyle && this.cssClasses.readOnly,
+      this.isDisabledStyle && this.cssClasses.disabled,
+      this.isPreviewStyle && this.cssClasses.preview,
+      !this.isDesignMode && this.areInvisibleElementsShowing && !this.visible && this.cssClasses.invisible
+    );
+  }
+  public getQuestionContainerCss(): string {
+    return toCssClasses(this.cssClasses.questionContainer);
+  }
+  public getHeaderAndContentContainerCss(): string {
+    return toCssClasses(this.cssClasses.headerAndContentContainer);
+  }
+  public getQuestionRootCss() {
+    return toCssClasses(this.cssClasses.root, this.isMobile && this.cssClasses.rootMobile);
+  }
+  public updateElementCss(reNew?: boolean): void {
+    if (this.wasRendered) {
+      super.updateElementCss(reNew);
+      if (reNew) {
+        this.updateQuestionCss();
+      }
+    } else {
+      this.clearCssClasses();
+    }
+    this.resetIndents();
+  }
+  private updateQuestionCss(): void {
+    if (this.isLoadingFromJson || !this.survey || this.isDisposed) return;
+    if (this.wasRendered) {
+      this.updateElementCssCore(this.cssClasses);
+    }
+  }
+  private ensureElementCss() {
+    if (!this.cssClassesValue) {
+      this.updateQuestionCss();
+    }
+  }
+  protected getCssClasses(): any {
+    return this.cssClasses;
+  }
+  protected updateElementCssCore(cssClasses: any): void {
+    this.setCssRoot(this.getCssRoot(cssClasses));
+    this.setCssHeader(this.getCssHeader(cssClasses));
+    this.setCssContent(this.getCssContent(cssClasses));
+    this.resetCssTitle();
+    this.setCssDescription(this.getCssDescription(cssClasses));
+    this.setCssError(this.getCssError(cssClasses));
+  }
+  protected updateCssClasses(res: any, css: any): void {
+    if (!css.question) return;
+    const objCss = css[this.getCssType()];
+    res.title = toCssClasses(res.title, this.isRenderedRequired && css.question.titleRequired);
+
+    const isRequiredCss = this.isRenderedRequired && !!css.question.required;
+    if (objCss === undefined || objCss === null) {
+      res.root = toCssClasses(res.root);
+    } else if (typeof objCss === "string" || objCss instanceof String) {
+      const objCssStr = objCss.toString();
+      res.root = toCssClasses(res.root, isRequiredCss && objCssStr, objCssStr);
+    } else {
+      res.root = toCssClasses(res.root);
+      for (const key in objCss) {
+        res[key] = objCss[key];
+      }
+    }
+  }
+  protected getCssType(): string {
+    return this.getType();
+  }
+
+  public get renderCssRoot(): string {
+    return this.cssClasses.root || undefined;
+  }
+  protected calcPaddingLeft(): string {
+    return this.getIndentSize(this.indent);
+  }
+  protected calcPaddingRight(): string {
+    return this.getIndentSize(this.rightIndent);
+  }
+  private getIndentSize(indent: number): string {
+    if (indent < 1 || !this.getSurvey() || !this.cssClasses || !this.cssClasses.indent) return "";
+    return indent * this.cssClasses.indent + "px";
+  }
+  /**
+   * Moves focus to the input field of this question.
+   * @param onError Pass `true` if you want to focus an input field with the first validation error. Default value: `false` (focuses the first input field). Applies to question types with multiple input fields.
+   */
+  public focus(onError: boolean = false, scrollIfVisible?: boolean): void {
+    if (this.isDesignMode || !this.isVisibleWithParents || this.isReadOnly || !this.survey) return;
+    let page = this.page;
+    const shouldChangePage = !!page && this.survey.activePage !== page;
+    const isSingleInput = this.isSingleInputMode;
+    if (shouldChangePage && !isSingleInput) {
+      this.survey.focusQuestionByInstance(this, onError);
+    } else {
+      if (isSingleInput) {
+        this.singleInputBehavior.focusSingleInput(onError);
+      } else {
+        this.expandAllParents();
+        const scrollOptions: ScrollIntoViewOptions = (this.survey as SurveyModel)["isSmoothScrollEnabled"] && isAnimationEnabled() ? { behavior: "smooth" } : undefined;
+        this.survey.scrollElementToTop({
+          element: this, question: this, id: this.renderedId,
+          scrollIfVisible, scrollIntoViewOptions: scrollOptions,
+          onScolledCallback: () => { this.focusInputElement(onError); }
+        });
+      }
+    }
+  }
+  focusInputElement(onError: boolean): void {
+    const id = !onError ? this.getFirstInputElementId() : this.getFirstErrorInputElementId();
+    const surveyRoot = (this.survey as SurveyModel)?.rootElement;
+    const res = SurveyElement.FocusElement(id, false, surveyRoot, this.shouldHandleFocusScroll);
+    if (res || !!this.customWidget) {
+      this.fireCallback(this.focusCallback);
+    }
+  }
+  private get isValidateVisitedEmptyFields(): boolean {
+    return this.supportEmptyValidation() && !!this.survey && this.validationCallbacks.getValidateVisitedEmptyFields() && this.isEmpty();
+  }
+  private isFocusEmpty: boolean;
+  protected supportEmptyValidation(): boolean { return false; }
+  onBlur(event: any): void {
+    this.onBlurCore(event);
+  }
+  onFocus(event: any): void {
+    this.onFocusCore(event);
+  }
+  protected onBlurCore(event: any): void {
+    if (this.isFocusEmpty && this.isEmpty()) {
+      this.validate(true);
+    }
+  }
+  protected onFocusCore(event: any): void {
+    this.isFocusEmpty = this.isValidateVisitedEmptyFields;
+  }
+  public expandAllParents(): void {
+    this.expandAllParentsCore(this);
+  }
+  private expandAllParentsCore(element: IElement) {
+    if (!element) return;
+    if (element.isCollapsed) {
+      element.expand();
+    }
+    this.expandAllParentsCore((<any>element).parent);
+    this.expandAllParentsCore((<any>element).parentQuestion);
+  }
+  public focusIn(): void {
+    if (!this.survey || this.isDisposed || this.isContainer) return;
+    (this.survey as SurveyModel).whenQuestionFocusIn(this);
+  }
+  protected fireCallback(callback: () => void): void {
+    if (callback) callback();
+  }
+  public getOthersMaxLength(): any {
+    if (!this.survey) return null;
+    return this.survey.maxCommentLength > 0 ? this.survey.maxCommentLength : null;
+  }
+  protected onCreating(): void { }
+  public getFirstQuestionToFocus(withError: boolean): Question {
+    return this.hasInput && (!withError || this.currentErrorCount > 0) ? this : null;
+  }
+  /* The first nested question that can take the focus, in walk order. A panel decides for its elements;
+     a cell or an editor has to be editable as well, because Question.focus refuses a read-only question. */
+  protected getFirstNestedQuestionToFocus(withError: boolean): Question {
+    return findInNestedWalk((visit: NestedElementVisit): void => this.forEachNestedElementToFocus(visit), (info: INestedElementInfo): Question => {
+      if (info.element.isPanel) return (<PanelModel>info.element).getFirstQuestionToFocus(withError);
+      const question = <Question>info.element;
+      return question.isVisible && !question.isReadOnly ? question.getFirstQuestionToFocus(withError) : null;
+    });
+  }
+  // The nested elements the question shows. Nothing is built: an element that does not exist has no input.
+  protected forEachNestedElementToFocus(visit: NestedElementVisit): void {
+    this.forEachNestedElement(visit, { build: "none", visibleOnly: true });
+  }
+  protected getFirstInputElementId(): string | (() => HTMLElement) {
+    return this.getNestedInputElementId(false) || this.inputId;
+  }
+  protected getFirstErrorInputElementId(): string | (() => HTMLElement) {
+    return this.getNestedInputElementId(true) || this.getFirstInputElementId();
+  }
+  // The question decides what gets the focus; a nested one knows its own first input.
+  private getNestedInputElementId(withError: boolean): string | (() => HTMLElement) {
+    const question = this.getFirstQuestionToFocus(withError);
+    if (!question || question === this) return undefined;
+    return withError ? question.getFirstErrorInputElementId() : question.getFirstInputElementId();
+  }
+  public supportComment(): boolean {
+    const prop = this.getPropertyByName("showCommentArea");
+    return !prop || prop.visible;
+  }
+  public supportOther(): boolean {
+    return false;
+  }
+  /**
+   * Makes the question required. If a respondent skips a required question, the survey displays a validation error.
+   * @see requiredIf
+   * @see [Data Validation](https://surveyjs.io/form-library/documentation/data-validation)
+   */
+  @property() isRequired: boolean;
+  /**
+   * A Boolean expression. If it evaluates to `true`, this question becomes required.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   * @see isRequired
+   */
+  @property() requiredIf: string;
+  /**
+   * Specifies whether to display a comment area.
+   * @see comment
+   * @see commentText
+   * @see showOtherItem
+   */
+  public get showCommentArea(): boolean {
+    return this.getPropertyValue("showCommentArea", false);
+  }
+  public set showCommentArea(val: boolean) {
+    if (!this.supportComment()) return;
+    this.setPropertyValue("showCommentArea", val);
+  }
+
+  public get hasComment(): boolean {
+    return this.showCommentArea;
+  }
+  public set hasComment(val: boolean) {
+    this.showCommentArea = val;
+  }
+
+  protected getIdPrefix(): string { return "sq"; }
+  public get ariaTitleId(): string {
+    return this.renderedId + "_ariaTitle";
+  }
+  public get ariaDescriptionId(): string {
+    return this.renderedId + "_ariaDescription";
+  }
+  public get commentId(): string {
+    return this.renderedId + "_comment";
+  }
+  /**
+   * A unique value for the `name` HTML attribute of grouped inputs (e.g. radio buttons), so that questions sharing the same `name` (such as copies inside a Dynamic Panel) do not collapse into one input group.
+   */
+  public get questionName(): string {
+    return this.name + "_" + this.id;
+  }
+  public get requireUpdateCommentValue(): boolean { return this.showCommentArea; }
+  public readOnlyCallback: () => boolean;
+  public get isReadOnly(): boolean {
+    const isParentReadOnly = !!this.parent && this.parent.isReadOnly;
+    const isPareQuestionReadOnly = !!this.parentQuestion && this.parentQuestion.isReadOnly;
+    const isSurveyReadOnly = !!this.survey && this.survey.isDisplayMode;
+    const callbackVal = !!this.readOnlyCallback && this.readOnlyCallback();
+    return this.readOnly || isParentReadOnly || isSurveyReadOnly || isPareQuestionReadOnly || callbackVal;
+  }
+  public get isInputReadOnly(): boolean {
+    if (this.forceIsInputReadOnly !== undefined) {
+      return this.forceIsInputReadOnly;
+    }
+    return this.isReadOnly || this.isDesignMode;
+  }
+  public get renderedInputReadOnly(): string {
+    return this.isInputReadOnly ? "" : undefined;
+  }
+  public get isReadOnlyAttr(): boolean {
+    return this.isReadOnly;
+  }
+  public get isDisabledAttr(): boolean {
+    return this.isDesignMode || (!!this.readOnlyCallback && this.readOnlyCallback());
+  }
+  public get isViewMode(): boolean {
+    return !this.isDesignMode && this.isReadOnly && this.getReadOnlyMode() === "view";
+  }
+  public get viewDisplayText(): string {
+    const value = this.getViewDisplayText();
+    if (value === undefined || value === null || value === "") return readOnlyViewEmptyText;
+    return value;
+  }
+  protected getViewDisplayText(): string {
+    const value = this.displayValue;
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return "";
+  }
+  public get viewModeCssClass(): string {
+    const css = this.survey ? this.survey.getCss() : null;
+    return css && css.view ? css.view : "sd-view";
+  }
+  public getCommentViewText(item?: any): string {
+    let text = "";
+    if (item && typeof (<any>this).getCommentTextAreaModel === "function") {
+      text = (<any>this).getCommentTextAreaModel(item)?.getTextValue() || "";
+    } else {
+      text = this.comment || "";
+    }
+    return text ? text : readOnlyViewEmptyText;
+  }
+  public onReadOnlyModeChanged(): void {
+    super.onReadOnlyModeChanged();
+    const value = this.isViewMode;
+    if (this.getPropertyValue("isViewMode") !== value) {
+      this.setPropertyValue("isViewMode", value);
+    }
+    this.forEachNestedElement(info => {
+      getNestedElementQuestions(info).forEach(q => q.onReadOnlyModeChanged());
+    }, { build: "none", visibleOnly: false });
+  }
+  protected onReadOnlyChanged(): void {
+    this.setPropertyValue("isInputReadOnly", this.isInputReadOnly);
+    super.onReadOnlyChanged();
+    if (this.isReadOnly) {
+      this.clearErrors();
+    }
+    this.updateQuestionCss();
+    this.resetRenderedCommentPlaceholder();
+    this.onReadOnlyModeChanged();
+  }
+  /**
+   * A Boolean expression. If it evaluates to `false`, this question becomes read-only.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/how-to-conditionally-make-input-field-read-only/ (linkStyle))
+   * @see readOnly
+   * @see readOnlyMode
+   * @see isReadOnly
+   */
+  @property() enableIf: string;
+  public surveyChoiceItemVisibilityChange(): void { }
+  public runCondition(properties: HashTable<any>): void {
+    if (this.isDesignMode) return;
+    if (!properties) properties = {};
+    properties["question"] = this;
+    this.runConditionCore(properties);
+    if (this.canApplyDefaultValue() && (!this.isClearValueOnHidden || this.isVisibleInSurvey)) {
+      if (!this.canSkipDefaultValueExpression()) {
+        this.runDefaultValueExpression(properties);
+      }
+    }
+  }
+  // The inputs and the result of the last completed default value run of the conditions pass.
+  // Copies, not references: a defaultValue or a value changed in place must count as changed.
+  private lastDefaultValueRun: { expression: string, defaultValue: any, value: any };
+  // A run in the survey's conditions pass is skipped, the way a strict-dependency visibleIf is,
+  // when no value the expression uses changed. The inputs and the question's value must also be
+  // what the last run left: a value cleared or changed by code gets the default value back.
+  private canSkipDefaultValueExpression(): boolean {
+    const lastRun = this.lastDefaultValueRun;
+    if (!lastRun || !settings.expressionQuestionTrackDependencies) return false;
+    const survey: any = this.getSurvey();
+    const keys = !!survey && typeof survey.getValueChangedKeys === "function" ? survey.getValueChangedKeys() : undefined;
+    if (!keys) return false;
+    if (lastRun.expression !== this.defaultValueExpression) return false;
+    const runner = this.getExpressionByProperty("defaultValueExpression");
+    if (!runner || runner.isAsync) return false;
+    if (!Helpers.isTwoValueEquals(lastRun.defaultValue, this.defaultValue, false, true, false)) return false;
+    if (!this.isTwoValueEquals(lastRun.value, this.value)) return false;
+    // A path under a cleared value ({a.x} once a is cleared) counts as changed
+    return this.canSkipExpressionByKeys(runner, keys, undefined, true);
+  }
+  public get isInDesignMode(): boolean {
+    return !this.isContentElement && this.isDesignMode;
+  }
+  /**
+   * A question number or letter (depends on the `questionStartIndex` property of the question container (panel, page, or survey)).
+   *
+   * When the question number, title, or the entire question is invisible, this property returns an empty string.
+   * @see SurveyModel.questionStartIndex
+   * @see showNumber
+   * @see titleLocation
+   * @see visibleIf
+   */
+  public get no(): string {
+    return this.getPropertyValue("no", undefined, () => this.calcNo());
+  }
+  onGetNoCallback : (no: string) => string;
+  private calcNo(): string {
+    let no = "";
+    const hasTitle = this.getHasTitleOnCalcNo() && this.showNumber && this.visibleIndex >= 0;
+    if (hasTitle) {
+      no = Helpers.getNumberByIndex(this.visibleIndex, this.getStartIndex());
+    }
+    if (this.onGetNoCallback) {
+      return this.onGetNoCallback(no);
+    }
+    if (!hasTitle) return no;
+    if (!!this.parent) {
+      no = (<any>this.parent).addNoFromChild(no);
+    }
+    if (!!this.survey) {
+      no = this.titleSettings.getUpdatedQuestionNo(this, no);
+    }
+    return no;
+  }
+  protected getHasTitleOnCalcNo(): boolean {
+    return this.hasTitle;
+  }
+  endLoadingFromJson(): void {
+    super.endLoadingFromJson();
+    // Property changes are not reported while the JSON loads
+    this.notifySurveyOnTriggersChanged();
+  }
+  public onSurveyLoad(): void {
+    this.isCustomWidgetRequested = false;
+    this.fireCallback(this.surveyLoadCallback);
+    this.updateValueWithDefaults();
+    if (this.isEmpty()) {
+      this.initDataFromSurvey();
+    }
+  }
+  protected onSetData(): void {
+    super.onSetData();
+    if (!this.isDesignMode && !!this.survey && !this.isLoadingFromJson) {
+      // Check before reading the survey value: replacing the question value with the survey one is not a direct change.
+      // Re-attaching to a survey (e.g. building the preview or single-page container) must not
+      // re-apply default values to a question whose value was set or cleared directly.
+      const canApplyDefaultValue = this.canApplyDefaultValue();
+      this.initDataFromSurvey();
+      this.onSurveyValueChanged(this.value);
+      if (canApplyDefaultValue) {
+        this.updateValueWithDefaults();
+      }
+      this.updateIsAnswered();
+    }
+  }
+  protected initDataFromSurvey(): void {
+    if (!!this.data) {
+      const val = this.data.getValue(this.getValueName());
+      if (!Helpers.isValueEmpty(val) || !this.isLoadingFromJson) {
+        this.updateValueFromSurvey(val);
+      }
+      this.initCommentFromSurvey();
+    }
+  }
+  protected initCommentFromSurvey(): void {
+    if (!!this.data && this.requireUpdateCommentValue) {
+      this.updateCommentFromSurvey(this.data.getComment(this.getValueName()));
+    } else {
+      this.updateCommentFromSurvey("");
+    }
+  }
+  protected runExpression(expression: string): any {
+    if (!this.survey || !expression) return undefined;
+    return this.survey.runExpression(expression);
+  }
+  get commentAreaRows(): number {
+    return this.survey && this.survey.commentAreaRows;
+  }
+  private get autoGrowComment(): boolean {
+    return this.survey && this.survey.autoGrowComment;
+  }
+  private get allowResizeComment(): boolean {
+    return this.survey && this.survey.allowResizeComment;
+  }
+  private get questionValue(): any {
+    return this.getPropertyValueWithoutDefault("value");
+  }
+  private set questionValue(val: any) {
+    // An array value is updated in place (Base.setArrayPropertyDirectly): its instance does not say
+    // that it changed, the revision does.
+    this.valueRevision++;
+    this.setPropertyValue("value", val);
+  }
+  private get questionComment(): string {
+    return this.getPropertyValueWithoutDefault("comment");
+  }
+  private set questionComment(val: string) {
+    this.setPropertyValue("comment", val);
+    this.fireCallback(this.commentChangedCallback);
+  }
+  /* A records question keeps this question for another record - a Dynamic Matrix row on a sort or a page
+     move (QuestionRecordItem.rebindToRecord) - and pushes that record in right after: what the
+     question holds for the old record goes first, so that the record arrives as it arrives in a new
+     question. The errors and the mark of the last validation (containsErrors, which the title classes
+     read), the value and the comment, whether they were changed directly, and the visit the empty-field
+     validation remembers. Nothing is written and the survey is not told. */
+  protected resetForAnotherRecord(): void {
+    this.clearErrors();
+    this.updateContainsErrors();
+    // Through the type's own setter: what a type derives from the value (a rendered value) follows.
+    this.setQuestionValue(undefined);
+    this.questionComment = "";
+    this.isValueChangedDirectly = false;
+    this.isFocusEmpty = false;
+  }
+  public get isValueArray(): boolean { return false; }
+  /**
+   * Gets or sets the question value.
+   *
+   * The following table illustrates how the value type depends on the question type:
+   *
+   * | Question type | Value type(s) |
+   * | ------------- | ------------- |
+   * | Checkboxes | <code>Array&lt;string &#124; number &#124; boolean&gt;</code> |
+   * | Dropdown | `string` \| `number` \| `boolean` |
+   * | Dynamic Matrix | `Array<object>` |
+   * | Dynamic Panel | `Array<object>` |
+   * | Expression | `string` |
+   * | File Upload | `File` \| `Array<File>` |
+   * | Image Picker | `string` \| `Array<string>` |
+   * | Long Text | `string` |
+   * | Multi-Select Dropdown | <code>Array&lt;string &#124; number &#124; boolean&gt;</code> |
+   * | Multi-Select Matrix | `object` |
+   * | Multiple Textboxes | `object` |
+   * | Radio Button Group | `string` \| `number` \| `boolean` |
+   * | Ranking | <code>Array&lt;string &#124; number &#124; boolean&gt;</code> |
+   * | Rating Scale | `number` \| `string` \| `boolean` |
+   * | Slider | `number` \| `Array<number>` |
+   * | Signature | `string` |
+   * | Single-Line Input | `string` \| `number` \| `Date` |
+   * | Single-Select Matrix | `object` |
+   * | Yes/No (Boolean) | `boolean` \| `string` \| `number` |
+   * @see getValueType
+   * @hidefor QuestionImageModel, QuestionHtmlModel
+   */
+  public get value(): any {
+    return this.getValueCore();
+  }
+  public set value(newValue: any) {
+    this.setNewValue(newValue);
+  }
+  public getStructuredValue(level: number = -1): any {
+    return this.value;
+  }
+  public get hasFilteredValue(): boolean { return false; }
+  public getFilteredValue(isUnwrapped?: boolean): any { return this.value; }
+  public getFilteredName(): string { return this.getValueName(); }
+  public get valueForSurvey(): any {
+    return this.valueForSurveyCore(this.value);
+  }
+  protected valueForSurveyCore(val: any): any {
+    if (!!this.valueToDataCallback) {
+      return this.valueToDataCallback(val);
+    }
+    return val;
+  }
+  protected valueFromDataCore(val: any): any {
+    if (!!this.valueFromDataCallback) {
+      return this.valueFromDataCallback(val);
+    }
+    return val;
+  }
+  /**
+   * Sets the question's `value` and `comment` properties to `undefined`.
+   * @see value
+   * @see comment
+   */
+  public clearValue(keepComment?: boolean, fromUI?: boolean): void {
+    this.runDeletingEmptyValues((): void => this.clearValueCore(undefined, keepComment, fromUI));
+  }
+  private clearValueCore(emptyValue: any, keepComment: boolean, fromUI: boolean): void {
+    if (this.value !== emptyValue) {
+      this.value = emptyValue;
+    }
+    if (emptyValue === undefined) {
+      this.removeKeptEmptyValue();
+    }
+    if (!!this.comment && keepComment !== true) {
+      this.comment = undefined;
+    }
+    this.setValueChangedDirectly(fromUI === true);
+    this.onClearValue();
+  }
+  protected onClearValue(): void {}
+  clearValueFromUI(): void {
+    this.clearValueByRespondent(true, true);
+  }
+  /* A clear the respondent makes in the question's UI: the clear button, or a click on the selected rating.
+     With data.keepEmptyValues on, the question gets the empty value its UI produces, so its key stays in the
+     data: [] for an array value, {} for an object value, else null. A clear by code goes through clearValue(). */
+  protected clearValueByRespondent(keepComment: boolean, fromUI: boolean): void {
+    if (!this.isKeepingEmptyValues() || !this.canKeepEmptyValue()) {
+      this.clearValue(keepComment, fromUI);
+      return;
+    }
+    this.clearValueCore(this.isEmpty() ? this.value : this.getEmptyValueOnRespondentClear(), keepComment, fromUI);
+  }
+  protected getEmptyValueOnRespondentClear(): any {
+    const val = this.value;
+    if (Array.isArray(val)) return [];
+    return Helpers.isValueObject(val) ? {} : null;
+  }
+  // An empty value data.keepEmptyValues kept equals undefined, so the value setter skips it: it is removed here.
+  private removeKeptEmptyValue(): void {
+    if (!this.data || !this.isKeepingEmptyValues() || !this.canSetValueToSurvey()) return;
+    const val = this.data.getValue(this.getValueName());
+    if (val === undefined || !this.isValueEmpty(val)) return;
+    this.data.setValue(this.getValueName(), undefined, false, this.allowNotifyValueChanged, this.name);
+  }
+  protected isKeepingEmptyValues(): boolean {
+    return !!this.survey && !!this.survey.getSettings().data.keepEmptyValues;
+  }
+  // See ISurvey.runDeletingEmptyValues: the empty values func writes remove their keys.
+  protected runDeletingEmptyValues<T>(func: () => T): T {
+    return !!this.survey ? this.survey.runDeletingEmptyValues(func) : func();
+  }
+  /**
+   * Specifies whether to display a button that clears the question value.
+   *
+   * The button appears in the question title and stays hidden when the [title is hidden](#titleLocation). A question renders the button only when it supports a title action. Dropdown, Multi-Select Dropdown, and Signature Pad use this property for their own clear button. File Upload, HTML, Image, Expression, Dynamic Matrix, and Dynamic Panel do not show it.
+   *
+   * Default value: `false`
+   */
+  @property() allowClear: boolean;
+  public get canShowClearButton(): boolean {
+    return !!this.allowClear && !this.isReadOnly;
+  }
+  // False for a question whose clear control lives somewhere other than the title,
+  // or for a render mode that has no title-action slot.
+  public get supportClearTitleAction(): boolean {
+    return true;
+  }
+  protected getDefaultTitleActions(): Array<Action> {
+    if (this.isDesignMode || !this.supportClearTitleAction) return [];
+    return [this.createClearTitleAction(() => this.canShowClearButton)];
+  }
+  protected createClearTitleAction(isVisible: () => boolean): Action {
+    return new Action({
+      locTitleName: "clearCaption",
+      id: `sv-clr-btn-${this.id}`,
+      action: () => { this.clearValueFromUI(); },
+      innerCss: this.cssClasses.clearButton,
+      visible: <any>new ComputedUpdater(isVisible),
+      ariaLabelledBy: this.a11y_input_ariaLabelledBy
+    });
+  }
+  public unbindValue(): void {
+    this.clearValue();
+  }
+  public createValueCopy(): any {
+    return this.getUnbindValue(this.value);
+  }
+  initDataUI(): void { }
+  protected getUnbindValue(value: any): any {
+    if (this.isValueSurveyElement(value)) return value;
+    return Helpers.getUnbindValue(value);
+  }
+  protected isValueSurveyElement(val: any): boolean {
+    if (!val) return false;
+    if (Array.isArray(val))
+      return val.length > 0 ? this.isValueSurveyElement(val[0]) : false;
+    return val.isSurveyObj === true;
+  }
+  private canClearValueAsInvisible(reason: string): boolean {
+    if (reason === "onHiddenContainer" && !this.isParentVisible) return true;
+    if (this.isVisibleInSurvey) return false;
+    if (!!this.page && this.page.isStartPage) return false;
+    if (!this.survey) return true;
+    return !this.survey.hasVisibleQuestionByValueName(this);
+  }
+  /**
+   * Returns `true` if a parent element (page or panel) is visible.
+   */
+  public get isParentVisible(): boolean {
+    if (this.parentQuestion && !this.parentQuestion.isVisible) return false;
+    var parent = this.parent;
+    while(parent) {
+      if (!parent.isVisible) return false;
+      parent = parent.parent;
+    }
+    return true;
+  }
+  public clearValueIfInvisible(reason: string = "onHidden"): void {
+    const clearIf = this.getClearIfInvisible();
+    if (clearIf === "none") return;
+    if (reason === "onHidden" && clearIf === "onComplete") return;
+    if (reason === "onHiddenContainer" && clearIf !== reason) return;
+    this.runDeletingEmptyValues((): void => this.clearValueIfInvisibleCore(reason));
+  }
+  protected clearValueIfInvisibleCore(reason: string): void {
+    if (this.canClearValueAsInvisible(reason)) {
+      this.clearValue();
+    }
+  }
+  /* What clearValueIfInvisible("onComplete") does to a stored answer beyond clearing an invisible one,
+     told without building the question: "keep", "clear" (the answer goes, its comment stays), or
+     undefined - only a built question can tell. A records question asks its template questions for the
+     records without an object. A type that overrides clearValueIfInvisibleCore answers undefined unless
+     it judges the answer itself (getAnswerCleanupAtCompleteCore).
+     The records question calls it by element access: a protected member of Question cannot be called
+     on another Question from a subclass. The compiler checks the signature;
+     tests/dynamic-data/internal-access.test.ts checks that the member exists. */
+  protected getAnswerCleanupAtComplete(value: any): string {
+    if (this.getClearIfInvisible() === "none" || this.isValueEmpty(value)) return "keep";
+    if (this.clearValueIfInvisibleCore === Question.prototype.clearValueIfInvisibleCore) return "keep";
+    return this.getAnswerCleanupAtCompleteCore(value);
+  }
+  protected getAnswerCleanupAtCompleteCore(value: any): string {
+    return undefined;
+  }
+  /**
+   * Specifies when to clear the question value if the question becomes invisible.
+   *
+   * Possible values:
+   *
+   * - `"default"` (default) - Inherits the setting from the Survey's [`clearInvisibleValues`](https://surveyjs.io/form-library/documentation/surveymodel#clearInvisibleValues) property.
+   * - `"onHidden"` - Clears the value when the question becomes invisible. If a question is invisible on startup and has an initial value, this value will be cleared when the survey is complete.
+   * - `"onHiddenContainer"` - Clears the value when the question or its container (page or panel) becomes invisible. If a question is invisible on startup and has an initial value, this value will be cleared when the survey is complete.
+   * - `"onComplete"` - Clears the value when the survey is complete.
+   * - `"none"` - Never clears the value of an invisible question.
+   * @see SurveyModel.clearInvisibleValues
+   * @see visible
+   * @see SurveyModel.onComplete
+   */
+  @property() clearIfInvisible: string;
+  protected getClearIfInvisible(): string {
+    const res = this.clearIfInvisible;
+    if (!!this.survey) return this.survey.getQuestionClearIfInvisible(res);
+    return res !== "default" ? res : "onComplete";
+  }
+  public get displayValue(): any {
+    if (this.isLoadingFromJson) return "";
+    return this.getDisplayValue(true);
+  }
+  /**
+   * Returns a display text that corresponds to the question value. For example, if you call this method for a Dropdown question, it returns an item text instead of an item value.
+   * @param keysAsText Applies when the question value is an object (in Matrix, Multiple Text, and similar questions). Pass `true` if not only values in the object should be display texts, but also keys. Default value: `false`.
+   * @param value Specify this parameter to get a display text for a specific value, not for the current question value. If the question value is an object, this parameter should be a similar object.
+   */
+  public getDisplayValue(keysAsText: boolean, value: any = undefined, isReadOnly: boolean = false): any {
+    var res = this.calcDisplayValue(keysAsText, value, isReadOnly);
+    if (this.survey) {
+      res = this.titleSettings.getQuestionDisplayValue(this, res);
+    }
+    return !!this.displayValueCallback ? this.displayValueCallback(res) : res;
+  }
+  private calcDisplayValue(keysAsText: boolean, value: any = undefined, isReadOnly: boolean = false): any {
+    if (this.customWidget) {
+      var res = this.customWidget.getDisplayValue(this, value);
+      if (res) return res;
+    }
+    value = value == undefined ? this.createValueCopy() : value;
+    if (this.isValueEmpty(value) && !this.locDefaultDisplayValue.isEmpty) {
+      value = this.defaultDisplayValue;
+    }
+    if (this.isValueEmpty(value, !this.allowSpaceAsAnswer)) return this.getDisplayValueEmpty();
+    return this.getDisplayValueCore(keysAsText, value, isReadOnly);
+  }
+  protected getDisplayValueCore(keyAsText: boolean, value: any, isReadOnly?: boolean): any {
+    return value;
+  }
+  protected getDisplayValueEmpty(): string {
+    return "";
+  }
+  /**
+   * A default value for the question. Ignored for question types that cannot have a [value](https://surveyjs.io/form-library/documentation/question#value) (for example, HTML).
+   *
+   * The default value is used as a question value in the following cases:
+   *
+   * - While the survey is being loaded from JSON.
+   * - The question is just added to the survey and does not yet have an answer.
+   * - The respondent left the answer empty.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/specify-default-question-value-dynamically (linkStyle))
+   * @see defaultValueExpression
+   */
+  public get defaultValue(): any {
+    return this.getPropertyValue("defaultValue");
+  }
+  public set defaultValue(val: any) {
+    if (this.isValueExpression(val)) {
+      this.defaultValueExpression = val.substring(1);
+      return;
+    }
+    this.setPropertyValue("defaultValue", this.valueToData(val));
+    this.updateValueWithDefaults();
+  }
+  /**
+   * An expression used to calculate the [`defaultValue`](https://surveyjs.io/form-library/documentation/question#defaultValue).
+   *
+   * This expression applies until the question [`value`](https://surveyjs.io/form-library/documentation/question#value) is specified by an end user or programmatically.
+   *
+   * An expression can reference other questions as follows:
+   *
+   * - `{other_question_name}`
+   * - `{panel.other_question_name}` (to access questions inside the same dynamic panel)
+   * - `{row.other_question_name}` (to access questions inside the same dynamic matrix or multi-column dropdown)
+   *
+   * An expression can also include built-in and custom functions for advanced calculations. For example, if the `defaultValue` should be today's date, set the `defaultValueExpression` to `"today()"`, and the corresponding built-in function will be executed each time the survey is loaded. Refer to the following help topic for more information: [Built-In Functions](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#built-in-functions).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/specify-default-question-value-dynamically (linkStyle))
+   * @see defaultValue
+   * @see setValueExpression
+   */
+  public get defaultValueExpression(): any {
+    return this.getPropertyValue("defaultValueExpression");
+  }
+  public set defaultValueExpression(val: any) {
+    this.setPropertyValue("defaultValueExpression", val);
+    this.defaultValueRunner = undefined;
+    this.updateValueWithDefaults();
+  }
+  /**
+   * A Boolean [expression](https://surveyjs.io/form-library/documentation/design-survey/conditional-logic#expressions). If it evaluates to `true`, the question value is reset to [default](#defaultValue).
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/set-question-value-dynamically/ (linkStyle))
+   * @see setValueIf
+   */
+  @property() resetValueIf: string;
+  /**
+   * A Boolean [expression](https://surveyjs.io/form-library/documentation/design-survey/conditional-logic#expressions). If it evaluates to `true`, the question value is set to a value calculated using the [`setValueExpression`](#setValueExpression).
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/set-question-value-dynamically/ (linkStyle))
+   * @see resetValueIf
+   */
+  @property() setValueIf: string;
+  /**
+   * An [expression](https://surveyjs.io/form-library/documentation/design-survey/conditional-logic#expressions) that calculates the question value.
+   *
+   * The `setValueExpression` is re-evaluated whenever a referenced question's value changes. If you also specify the [`setValueIf`](#setValueIf) expression, re-evaluation occurs only when it returns `true`.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/set-question-value-dynamically/ (linkStyle))
+   * @see defaultValueExpression
+   * @see resetValueIf
+   */
+  @property() setValueExpression: string;
+  public get resizeStyle() {
+    return this.allowResizeComment ? "both" : "none";
+  }
+  /**
+   * Returns the question value as an object in which the question name, title, value, and other parameters are stored as individual properties.
+   *
+   * If the question can have more than one value (Matrix, Multiple Text), the object enables the `isNode` flag and stores information about these values in the `data` property. Refer to the following help topic for more information: [Access Full Survey Results](https://surveyjs.io/form-library/documentation/handle-survey-results-access#access-full-survey-results).
+   *
+   * Pass an object with the `includeEmpty` property set to `false` if you want to skip empty answers.
+   */
+  public getPlainData(options?: IPlainDataOptions): IQuestionPlainData {
+    if (!options) {
+      options = { includeEmpty: true, includeQuestionTypes: false };
+    }
+    if (options.includeEmpty || !this.isEmpty()) {
+      var questionPlainData: IQuestionPlainData = {
+        name: this.name,
+        title: this.locTitle.renderedHtml,
+        value: this.value,
+        displayValue: this.displayValue,
+        isNode: false,
+        getString: (val: any) => this.getValueAsString(val),
+      };
+      if (options.includeQuestionTypes === true) {
+        questionPlainData.questionType = this.getType();
+      }
+      (options.calculations || []).forEach((calculation) => {
+        questionPlainData[calculation.propertyName] = this.getPlainDataCalculatedValue(calculation.propertyName);
+      });
+      if (this.showCommentArea) {
+        questionPlainData.isNode = true;
+        questionPlainData.data = [
+          {
+            name: 0,
+            isComment: true,
+            title: "Comment",
+            value: settings.commentSuffix,
+            displayValue: this.comment,
+            getString: (val: any) => this.getValueAsString(val),
+            isNode: false,
+          },
+        ];
+      }
+      return questionPlainData;
+    }
+    return undefined;
+  }
+  protected getPlainDataCalculatedValue(propName: string): any {
+    return this[propName];
+  }
+  /**
+   * A correct answer to this question. Specify this property if you want to [create a quiz](https://surveyjs.io/form-library/documentation/design-survey-create-a-quiz).
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/make-quiz-javascript/ (linkStyle))
+   * @see SurveyModel.getCorrectAnswerCount
+   * @see SurveyModel.getIncorrectAnswerCount
+   */
+  @property({ onSetting: (val: any, obj: Question) => obj.valueToData(val) }) correctAnswer: any;
+  /**
+   * The number of quiz questions. A question counts if it is visible, has an input field, and specifies `correctAnswer`.
+   * @see [Create a Quiz](https://surveyjs.io/form-library/documentation/design-survey-create-a-quiz)
+   * @see correctAnswer
+   * @see SurveyModel.getQuizQuestions
+   */
+  public get quizQuestionCount(): number {
+    if (this.isVisible && this.hasInput && this.hasCorrectAnswerValue())
+      return this.getQuizQuestionCount();
+    return 0;
+  }
+  public get correctAnswerCount(): number {
+    if (!this.isEmpty() && this.hasCorrectAnswerValue())
+      return this.getCorrectAnswerCount();
+    return 0;
+  }
+  protected hasCorrectAnswerValue(): boolean {
+    return !this.isValueEmpty(this.getCorrectAnswerValue());
+  }
+  protected getQuizQuestionCount(): number {
+    return 1;
+  }
+  protected getCorrectAnswerCount(): number {
+    return this.checkIfAnswerCorrect() ? 1 : 0;
+  }
+  // MERGE(V3): this doc block conflicts every merge - master (V2) adds `@since 2.5.30`, V3 omits
+  // it (3.0.0 API in V3). Keep the V3 (no `@since`) doc on merge.
+  /**
+   * Returns the [`correctAnswer`](#correctAnswer) value used in quiz calculations. Descendant
+   * classes can override this method to exclude values that cannot be selected (for example,
+   * non-existent or invisible choices in select-based questions).
+   */
+  protected getCorrectAnswerValue(): any {
+    return this.correctAnswer;
+  }
+  protected checkIfAnswerCorrect(): boolean {
+    // caseSensitive is left to the settings: the survey's own value, else the global one
+    const isEqual = Helpers.isTwoValueEquals(this.value, this.getCorrectAnswerValue(), this.getAnswerCorrectIgnoreOrder(), undefined, true, this.getSurveySettings());
+    const correct = isEqual ? 1 : 0;
+    const incorrect = this.quizQuestionCount - correct;
+    const options = {
+      result: isEqual,
+      correctAnswers: correct,
+      correctAnswerCount: correct,
+      incorrectAnswers: incorrect,
+      incorrectAnswerCount: incorrect,
+    };
+    if (!!this.survey) {
+      this.survey.onCorrectQuestionAnswer(this, options);
+    }
+    return options.result;
+  }
+  protected getAnswerCorrectIgnoreOrder(): boolean { return false; }
+  /**
+  * Returns `true` if a question answer matches the [`correctAnswer`](#correctAnswer) property value.
+  *
+  * [View Demo](https://surveyjs.io/form-library/examples/create-a-scored-quiz (linkStyle))
+  * @see SurveyModel.getQuizQuestions
+  */
+  public isAnswerCorrect(): boolean {
+    return this.correctAnswerCount == this.quizQuestionCount;
+  }
+  public updateValueWithDefaults(): void {
+    if (this.isLoadingFromJson || (!this.isDesignMode && this.isDefaultValueEmpty())) return;
+    const isEmpty = this.isEmpty();
+    if (!this.isDesignMode && !isEmpty) return;
+    if (isEmpty && this.isDefaultValueEmpty()) return;
+    if (this.isClearValueOnHidden && !this.isVisible) return;
+    if (this.isDesignMode && this.isContentElement && this.isDefaultValueEmpty()) return;
+    if (!this.defaultValueExpression && this.parentQuestion?.isBuildingChildrenForStoredRecords()) return;
+    // Applying a default value is not a direct value change
+    this.runAsDefaultValueChange((): void => this.setDefaultValue());
+  }
+  // A write of the question's own that is no answer: the default values keep applying after it.
+  protected runAsDefaultValueChange(func: () => void): void {
+    this.defaultValueChangeScope.run(true, func);
+  }
+  public get isValueDefault(): boolean {
+    return !this.isEmpty() && (this.isEqualToValue(this.defaultValue) || !this.isValueChangedDirectly && !!this.defaultValueExpression);
+  }
+  protected get isClearValueOnHidden(): boolean {
+    const clearIf = this.getClearIfInvisible();
+    if (clearIf === "none" || clearIf === "onComplete") return false;
+    return clearIf === "onHidden" || clearIf === "onHiddenContainer";
+  }
+  getQuestionFromArray(name: string, index: number): IQuestion {
+    return null;
+  }
+  // A question that does not own records answers positionally: the two indexes are the same number.
+  getQuestionFromRecord(name: string, recordIndex: number): IQuestion {
+    return this.getQuestionFromArray(name, recordIndex);
+  }
+  public getDefaultValue(): any {
+    return this.defaultValue;
+  }
+  protected isDefaultValueEmpty(): boolean {
+    return !this.defaultValueExpression && this.isValueEmpty(this.defaultValue, !this.allowSpaceAsAnswer);
+  }
+  protected setDefaultValue(): void {
+    this.setDefaultValueCore((val: any): void => {
+      val = this.convertToCorrectValue(val);
+      if (!this.isEqualToValue(val)) {
+        this.setDefaultIntoValue(val);
+      }
+    });
+  }
+  protected setDefaultIntoValue(val: any): void {
+    this.value = val;
+  }
+  private setDefaultValueCore(setFunc: (val: any) => void): void {
+    const func = (val: any) => {
+      this.runExpressionSetValueCore(val, setFunc);
+    };
+    if (!this.runDefaultValueExpression(undefined, func)) {
+      func(this.getUnbindValue(this.defaultValue));
+    }
+  }
+  protected updateValueWithDefaultsOrClear(): void {
+    if (this.isDesignMode || this.isLoadingFromJson) return;
+    if (this.isDefaultValueEmpty()) {
+      this.clearValue();
+    } else {
+      this.setDefaultValue();
+    }
+  }
+  protected isValueExpression(val: any): boolean {
+    return !!val && typeof val == "string" && val.length > 0 && val[0] == "=";
+  }
+  protected convertFuncValuetoQuestionValue(val: any): any {
+    return Helpers.convertValToQuestionVal(val);
+  }
+  private runExpressionSetValueCore(val: any, setFunc?: (val: any) => void): void {
+    val = this.convertFuncValuetoQuestionValue(val);
+    // An empty result of defaultValueExpression or setValueExpression is no respondent's clear
+    if (this.isValueEmpty(val)) {
+      this.runDeletingEmptyValues((): void => setFunc(val));
+    } else {
+      setFunc(val);
+    }
+  }
+  private runExpressionSetValue(val: any): void {
+    this.runExpressionSetValueCore(val, (val: any): void => {
+      if (!this.isEqualToValue(val)) {
+        this.startSetValueOnExpression();
+        try {
+          this.value = val;
+        } finally {
+          this.finishSetValueOnExpression();
+        }
+      }
+    });
+  }
+  protected startSetValueOnExpression(): void {
+    this.survey?.startSetValueOnExpression();
+  }
+  protected finishSetValueOnExpression(): void {
+    this.survey?.finishSetValueOnExpression();
+  }
+  private runDefaultValueExpression(properties: HashTable<any> = null, setFunc?: (val: any) => void): boolean {
+    if (!this.data) return false;
+    // Only a run of the conditions pass (no setFunc) is recorded for canSkipDefaultValueExpression
+    const isConditionsPass = !setFunc;
+    if (!setFunc) {
+      setFunc = (val: any): void => {
+        this.runExpressionSetValue(val);
+      };
+    }
+    if (!properties) {
+      properties = this.defaultValueExpression ? this.data.getFilteredProperties() : {};
+      properties["question"] = this;
+    }
+    return this.runExpressionByProperty("defaultValueExpression", properties, (res: any) => {
+      if (res == undefined) res = this.defaultValue;
+      this.runAsDefaultValueChange((): void => setFunc(res));
+      if (isConditionsPass) {
+        this.lastDefaultValueRun = {
+          expression: this.defaultValueExpression,
+          defaultValue: Helpers.getUnbindValue(this.defaultValue),
+          value: Helpers.getUnbindValue(this.value)
+        };
+      }
+    });
+  }
+  /**
+   * A comment to the selected question value. Enable the `showCommentArea` property to allow users to leave comments.
+   * @see showCommentArea
+   * @see commentText
+   */
+  public get comment(): string {
+    return this.getQuestionComment();
+  }
+  public set comment(newValue: string) {
+    newValue = this.getTrimmedComment(newValue);
+    if (this.comment !== newValue) {
+      this.setNewComment(newValue);
+    }
+  }
+  protected getTrimmedComment(val: string): string {
+    return typeof val === "string" && !val.trim() ? "" : val;
+  }
+  public getCommentAreaCss(isOther: boolean = false): string {
+    return toCssClasses(
+      isOther && "form-group",
+      !isOther && this.cssClasses.formGroup,
+      this.cssClasses.commentArea,
+      isOther && this.cssClasses.otherArea
+    );
+  }
+
+  protected getQuestionComment(): string {
+    return this.questionComment;
+  }
+  /**
+   * Returns `true` if the question value is an empty string, array, or object or if it equals `undefined` or `null`.
+   */
+  public isEmpty(): boolean {
+    return this.isValueEmpty(this.value, !this.allowSpaceAsAnswer);
+  }
+  @property({ returnValue: false }) isAnswered: boolean;
+  protected updateIsAnswered(): void {
+    const oldVal = this.isAnswered;
+    this.setPropertyValue("isAnswered", this.getIsAnswered());
+    if (oldVal !== this.isAnswered) {
+      this.updateQuestionCss();
+    }
+  }
+  protected getIsAnswered(): boolean {
+    return !this.isEmpty();
+  }
+  /**
+   * Question validators.
+   *
+   * [Data Validation](https://surveyjs.io/form-library/documentation/data-validation (linkStyle))
+   */
+  public get validators(): Array<SurveyValidator> {
+    return this.getArrayPropertyValue("validators", (validator: any) => {
+      validator.owner = this;
+      this.resetValidationDependencies();
+    }, (validator: any) => {
+      this.resetValidationDependencies();
+    });
+  }
+  public set validators(val: Array<SurveyValidator>) {
+    this.setArrayPropertyValue("validators", val);
+  }
+  public getValidators(): Array<SurveyValidator> {
+    return this.validators;
+  }
+  public getSupportedValidators(): Array<string> {
+    const res: Array<string> = [];
+    let className = this.getType();
+    while(!!className) {
+      const classValidators = (<any>settings.supportedValidators)[className];
+      if (!!classValidators) {
+        for (let i = classValidators.length - 1; i >= 0; i--) {
+          res.splice(0, 0, classValidators[i]);
+        }
+      }
+      const classInfo = Serializer.findClass(className);
+      className = classInfo.parentName;
+    }
+    return res;
+  }
+  public addConditionObjectsByContext(objects: Array<IConditionObject>, context: any): void {
+    objects.push({
+      name: this.getValueName(),
+      text: this.processedTitle,
+      question: this,
+    });
+  }
+  /**
+   * Returns an array of questions nested within the current question. Use this method to obtain questions within [Multiple Text](https://surveyjs.io/form-library/documentation/api-reference/multiple-text-entry-question-model), [Dynamic Panel](https://surveyjs.io/form-library/documentation/api-reference/dynamic-panel-model), and [Matrix](https://surveyjs.io/form-library/documentation/api-reference/matrix-table-question-model)-like questions.
+   * @param visibleOnly A Boolean value that specifies whether to include only visible nested questions.
+   * @returns An array of nested questions.
+   */
+  public getNestedQuestions(visibleOnly: boolean = false, includeNested: boolean = true, includeItSelf: boolean = false): Array<Question> {
+    const res: Array<Question> = [];
+    this.collectNestedQuestions(res, visibleOnly, includeNested, includeItSelf);
+    if (!includeItSelf && res.length === 1 && res[0] === this) return [];
+    return res;
+  }
+  public collectNestedQuestions(questions: Array<Question>, visibleOnly: boolean = false, includeNested: boolean = true, includeItSelf: boolean = false): void {
+    if (visibleOnly && !this.isVisible) return;
+    this.collectNestedQuestionsCore(questions, visibleOnly, includeNested, includeItSelf);
+  }
+  protected collectNestedQuestionsCore(questions: Array<Question>, visibleOnly: boolean, includeNested: boolean, includeItSelf: boolean): void {
+    if (this.isListedAsNestedQuestion(includeItSelf)) questions.push(this);
+    if (!this.canListNestedElements(includeNested)) return;
+    // "rows": the rows of visibleRows, as the matrices have always listed them.
+    this.forEachNestedElement(info => {
+      // The content question of a custom question holds the wrapper's value; getNestedQuestions() has
+      // never listed it. The total row is not listed either.
+      if (info.location === "same" || info.role === "total") return;
+      // addNestedQuestion() decides between the child itself (no includeNested) and its descendants.
+      getNestedElementQuestions(info).forEach(q => q.addNestedQuestion(questions, visibleOnly, includeNested, includeItSelf));
+    }, { build: "rows", visibleOnly: visibleOnly });
+  }
+  // A question without nested instances and a custom question list themselves; a container lists itself only when asked.
+  protected isListedAsNestedQuestion(includeItSelf: boolean): boolean {
+    return true;
+  }
+  // Without includeNested a container lists its immediate children; a select question lists none.
+  protected canListNestedElements(includeNested: boolean): boolean {
+    return true;
+  }
+  /* The structure of a container: every nested element instance it owns, once, with its role, its
+     record segment, where its value lives and whether the container shows it. Instances only: the
+     definitions (a dynamic panel's template, matrix columns, choice items) stay with the walks that
+     need them. Each walk decides what to do at the boundary. */
+  protected forEachNestedElement(visit: NestedElementVisit, options: INestedWalkOptions): void {
+    const func: NestedElementVisit = options.visibleOnly ? (info: INestedElementInfo): boolean | void => info.visible && visit(info) : visit;
+    this.forEachNestedElementCore(func, options.build);
+  }
+  // A container type overrides this; a question without nested instances yields nothing.
+  protected forEachNestedElementCore(visit: NestedElementVisit, build: NestedWalkBuild): boolean | void { }
+  addNestedQuestion(questions: Array<Question>, visibleOnly: boolean, includeNested: boolean, includeItSelf?: boolean): void {
+    if (includeNested) {
+      this.collectNestedQuestions(questions, visibleOnly, includeNested, includeItSelf);
+    } else {
+      if (!visibleOnly || this.isVisible) {
+        questions.push(this);
+      }
+    }
+  }
+  public getConditionJson(operator: string = null, path: string = null): any {
+    const json = new JsonObject().toJsonObject(this);
+    json["type"] = this.getType();
+    delete json["allowClear"];
+    return json;
+  }
+  public hasErrors(fireCallback: boolean = true, focusOnFirstError: boolean = false): boolean {
+    return !this.validateCore(fireCallback, false, focusOnFirstError);
+  }
+  /**
+   * Validates this question and returns `false` if the validation fails.
+   * @param fireCallback *(Optional)* Pass `false` if you do not want to show validation errors in the UI.
+   * @see [Data Validation](https://surveyjs.io/form-library/documentation/data-validation)
+   */
+  public validate(fireCallback: boolean = true, focusFirstError: boolean = false, isOnValueChanged: boolean = false, callbackResult?: (res: boolean, question: Question) => void, isOnValueChanging?: boolean): boolean {
+    return this.validateCore(fireCallback, true, focusFirstError, isOnValueChanged, callbackResult, isOnValueChanging);
+  }
+  private validateCore(fireCallback: boolean, isRoot: boolean, focusOnFirstError: boolean = false, isOnValueChanged: boolean = false, callbackResult?: (res: boolean, question: Question) => void, isOnValueChanging?: boolean): boolean {
+    if (isRoot && isOnValueChanged && !!this.parent) {
+      this.parent.validateContainerOnly();
+    }
+    const context = new ValidationContext({
+      isOnValueChanged: isOnValueChanged,
+      isOnValueChanging: isOnValueChanging,
+      focusOnFirstError: focusOnFirstError,
+      fireCallback: fireCallback,
+      callbackResult: callbackResult
+    });
+    this.validateElement(context);
+    context.finish();
+    return context.runningResult;
+  }
+  public validateElement(context: ValidationContext): boolean {
+    return this.validateElementCore(context);
+  }
+  protected validateElementCore(context: ValidationContext): boolean {
+    const errors = this.checkForErrors(context);
+    if (context.fireCallback) {
+      this.errors = errors;
+      if (this.errors !== errors) {
+        this.errors.forEach(er => er.locText.strChanged());
+      }
+    }
+    context.setErrorElement(this, errors);
+    this.updateContainsErrors();
+    if (this.isCollapsed && context.fireCallback && errors.length > 0) {
+      this.expand();
+    }
+    return errors.length === 0;
+  }
+  public get currentErrorCount(): number {
+    return this.errors.length;
+  }
+  // The elements the question shows: a hidden one is not validated, so what it holds is stale.
+  protected getContainsErrors(): boolean {
+    return super.getContainsErrors() || !!findInNestedWalk(
+      (visit: NestedElementVisit): void => this.forEachNestedElement(visit, { build: "none", visibleOnly: true }),
+      (info: INestedElementInfo): boolean => info.element.isVisible && info.element.containsErrors);
+  }
+  // The errors of the questions the question shows, see getContainsErrors.
+  protected getNestedErrors(): Array<SurveyError> {
+    const res: Array<SurveyError> = [];
+    this.forEachNestedElement(info => {
+      getNestedElementQuestions(info).forEach(q => { if (q.isVisibleInSurvey) res.push(...q.getAllErrors()); });
+    }, { build: "none", visibleOnly: true });
+    return res;
+  }
+  /* A fix can come without a validation of the containers, so a nested question tells them. It does so
+     on a change only: a validation without errors must not ask a container once per cell. */
+  public updateContainsErrors(): void {
+    const prevValue = this.containsErrors;
+    super.updateContainsErrors();
+    if (prevValue === this.containsErrors) return;
+    for (let parent = <PanelModel>this.parent; !!parent; parent = <PanelModel>parent.parent) {
+      parent.updateContainsErrors();
+    }
+    this.parentQuestion?.updateContainsErrors();
+  }
+  /**
+   * Returns a character or text string that indicates a required question.
+   * @see SurveyModel.requiredMark
+   * @see isRequired
+   * @since 2.0.0
+   */
+  public get requiredMark(): string {
+    return this.survey != null && this.isRenderedRequired
+      ? this.titleSettings.requiredMark
+      : "";
+  }
+  /**
+   * @deprecated Use the [`requiredMark`](https://surveyjs.io/form-library/documentation/api-reference/question#requiredMark) property instead.
+   * @hidden
+   */
+  public get requiredText(): string {
+    return this.requiredMark;
+  }
+  public addError(error: SurveyError | string): void {
+    if (!error) return;
+    let newError: SurveyError = null;
+    if (typeof error === "string" || error instanceof String) {
+      newError = this.addCustomError(<string>error);
+    } else {
+      newError = <SurveyError>error;
+    }
+    this.errors.push(newError);
+  }
+  private addCustomError(error: string): SurveyError {
+    return new CustomError(error, this.survey);
+  }
+  public removeError(error: SurveyError): boolean {
+    if (!error) return false;
+    const errors = this.errors;
+    const index = errors.indexOf(error);
+    if (index !== -1) errors.splice(index, 1);
+    return index !== -1;
+  }
+  private checkForErrors(context: ValidationContext): Array<SurveyError> {
+    var qErrors = new Array<SurveyError>();
+    if (this.isVisible && this.canCollectErrors()) {
+      this.collectErrors(qErrors, context);
+    }
+    if (!!this.survey) {
+      if (this.validateValueCallback && qErrors.length === 0) {
+        const error = this.validateValueCallback();
+        if (error) {
+          qErrors.push(error);
+        }
+      }
+      this.validationCallbacks.validateQuestion(this, qErrors, context.fireCallback);
+    }
+    return qErrors;
+  }
+  protected canCollectErrors(): boolean {
+    return !this.isReadOnly || settings.readOnly.enableValidation;
+  }
+  private collectErrors(qErrors: Array<SurveyError>, context: ValidationContext): void {
+    this.onCheckForErrors(qErrors, context.isOnValueChanged, context.fireCallback);
+    if (qErrors.length > 0 || !this.canRunValidators(context.isOnValueChanged)) return;
+    const errors = this.runValidators(context);
+    if (errors.length > 0) {
+      //validators may change the question value.
+      qErrors.length = 0;
+      for (var i = 0; i < errors.length; i++) {
+        qErrors.push(errors[i]);
+      }
+    }
+  }
+  protected canRunValidators(isOnValueChanged: boolean): boolean {
+    return true;
+  }
+  /* On a value change, required is checked for the answer being cleared only. A question that already
+     shows its required error keeps it: a container re-validates every question it holds, and one answer
+     must not wipe the other required errors. */
+  protected onCheckForErrors(errors: Array<SurveyError>, isOnValueChanged: boolean, fireCallback: boolean): void {
+    if ((!isOnValueChanged || this.isOldAnswered || !!this.getErrorByType("required")) && this.hasRequiredError()) {
+      const err = new AnswerRequiredError(this.getRequiredErrorText(), this);
+      err.onUpdateErrorTextCallback = (err) => { err.text = this.getRequiredErrorText(); };
+      errors.push(err);
+    }
+    if (!this.isEmpty() && this.customWidget) {
+      const text = this.customWidget.validate(this);
+      if (!!text) {
+        errors.push(this.addCustomError(text));
+      }
+    }
+  }
+  // The text of the "required" error. A question type with its own required check (boolean requireTrue)
+  // overrides it; it is read again on a locale change through onUpdateErrorTextCallback.
+  protected getRequiredErrorText(): string {
+    return this.requiredErrorText;
+  }
+  public hasRequiredError(): boolean {
+    return this.isRequired && this.isEmpty();
+  }
+  private validatorRunner: ValidatorRunner;
+  // Stable read-only state: true while the asynchronous validators of this question have not
+  // finished. SurveyModel.getRunningAsyncOperations() reads it on every question, so a rename or a
+  // semantics change here is a breaking change of that API.
+  public get isRunningValidators(): boolean {
+    return this.getIsRunningValidators();
+  }
+  protected getIsRunningValidators(): boolean {
+    return !!this.validatorRunner;
+  }
+  private runValidators(context: ValidationContext): Array<SurveyError> {
+    if (!!this.validatorRunner) {
+      this.validatorRunner.onAsyncCompleted = null;
+    }
+    this.validatorRunner = new ValidatorRunner();
+    this.validatorRunner.onAsyncCompleted = (errors: Array<SurveyError>) => {
+      this.doOnAsyncCompleted(context.fireCallback, errors);
+      context.setErrorElement(this, errors);
+      context.removeElement(this.id);
+    };
+    context.addElement(this.id);
+    try {
+      return this.validatorRunner.run(this);
+    } catch(e) {
+      this.validatorRunner = null;
+      throw e;
+    }
+  }
+  private doOnAsyncCompleted(fireCallback: boolean, errors: Array<SurveyError>): void {
+    if (fireCallback) {
+      errors.forEach(er => {
+        if (this.errors.indexOf(er) < 0) {
+          this.errors.push(er);
+        }
+      });
+    }
+    this.validatorRunner = null;
+  }
+  public allowSpaceAsAnswer: boolean;
+  private isValueChangedInSurvey = false;
+  private isOldAnswered: boolean;
+  // Internal: true while the value of an answered question is being set, so that a value-change
+  // validation can tell the answer being cleared (see PanelModelBase.validateRequired).
+  public get isAnsweredBeforeValueChange(): boolean { return !!this.isOldAnswered; }
+  private isSettingQuestionValue: boolean;
+  protected allowNotifyValueChanged = true;
+  /* The old value goes to survey.questionValueChanged, which hands it to onDynamicPanelValueChanged
+     handlers (ISurveyOldValueReads). It is a copy taken before the write, because an array
+     value is updated in place. A records question skips the copy - one of every record - for its own
+     record writes when nothing reads it (getOldValueOnSetNewValue). */
+  protected setNewValue(newValue: any): void {
+    if (this.survey) {
+      newValue = this.survey.questionValueChanging(this, newValue);
+    }
+    if (this.isNewValueEqualsToValue(newValue)) return;
+    if (!this.checkIsValueCorrect(newValue)) return;
+    const oldValue = this.getOldValueOnSetNewValue();
+    this.isOldAnswered = this.isAnswered;
+    try {
+      this.isSettingQuestionValue = true;
+      try {
+        this.setNewValueInData(newValue);
+        this.allowNotifyValueChanged && this.onValueChanged();
+      } finally {
+        this.isSettingQuestionValue = false;
+      }
+      if (this.isAnswered !== this.isOldAnswered) {
+        this.updateQuestionCss();
+      }
+    } finally {
+      this.isOldAnswered = undefined;
+    }
+    if (this.survey) {
+      this.survey.questionValueChanged(this, oldValue);
+    }
+  }
+
+  protected getOldValueOnSetNewValue(): any {
+    return this.getUnbindValue(this.value);
+  }
+  public getValueChangingOptions(childQuestion: Question): any { return undefined; }
+  private checkIsValueCorrect(val: any): boolean {
+    const res = this.isValueEmpty(val, !this.allowSpaceAsAnswer) || this.isDataValueCorrect(val);
+    if (!res) {
+      ConsoleWarnings.inCorrectQuestionValue(this.name, val);
+    }
+    return res;
+  }
+  protected isDataValueCorrect(val: any): boolean {
+    return true;
+  }
+  // The walk behind SurveyModel.setData(), which describes what it reports and what it does not.
+  // The methods stay public because a panel calls them on its questions and a matrix on its cells.
+  // Pass 1: a container builds its dynamic rows and panel items and recurses into them, so that a
+  // creation handler or a trigger in a later container cannot change the answer of an earlier
+  // question after it has been checked. Nothing else happens here.
+  // The total row is no value holder: neither pass visits it.
+  public initializeForVerification(): void {
+    this.forEachNestedElement(info => {
+      if (info.role !== "total") info.element.initializeForVerification();
+    }, { build: "all", visibleOnly: false });
+  }
+  // Pass 2: the question adds its own segment, reports its own value and walks into the instances
+  // that hold its nested values.
+  public verifyDataCore(context: IVerifyDataContext): void {
+    const segment = this.getDataSegment();
+    if (segment !== undefined) context.pushSegment(segment);
+    this.verifyOwnValue(context);
+    if (!context.stopOnFirst || !context.hasIssues) {
+      this.verifyNestedValues(context);
+    }
+    if (segment !== undefined) context.popSegment();
+  }
+  // The key this question adds to a location: its value name. Undefined for the content question of
+  // a custom question, which holds the wrapper's value and adds nothing: the wrapper's key is the
+  // location of both.
+  protected getDataSegment(): string {
+    return !!this.getCustomQuestionWrapper() ? undefined : this.getValueName();
+  }
+  // The content question of a custom question has no parentQuestion; its data is the wrapper
+  // (QuestionCustomModelBase.getSurveyData() returns the wrapper itself).
+  private getCustomQuestionWrapper(): Question {
+    const data: any = this.data;
+    return !!data && data.isQuestion === true && data.contentQuestion === this ? <Question>data : undefined;
+  }
+  // The findings about the value of this question alone: its shape, its own choices, the keys of
+  // its value that nobody owns. It never walks into the nested instances: in validate() a nested
+  // cell reports its own error on itself and the container must not get a second error for it.
+  public verifyOwnValue(context: IVerifyDataContext): void {
+    if (context.checks.reportInvalidValueTypes) {
+      const valueInData = this.getIncorrectValueInData();
+      if (valueInData !== undefined) {
+        context.addIssue("invalidValueType", undefined, valueInData, this);
+        return;
+      }
+    }
+    const val = this.value;
+    if (this.isEmpty() || this.isNonDataValue(val)) return;
+    this.verifyValueCore(val, context);
+  }
+  // verifyDataCore() on every nested instance, so that the question of a finding is the instance that
+  // actually holds the value. "none": pass 1 built the rows and panels, and collecting builds nothing.
+  public verifyNestedValues(context: IVerifyDataContext): void {
+    this.forEachNestedElement(info => {
+      if (info.role === "total") return;
+      const element = info.element;
+      if (info.location === "root") {
+        context.runWithEmptySegments(() => element.verifyDataCore(context));
+        return;
+      }
+      // "same" needs no branch: its segment is undefined and so is its getDataSegment().
+      if (info.segment !== undefined) context.pushSegment(info.segment);
+      element.verifyDataCore(context);
+      if (info.segment !== undefined) context.popSegment();
+    }, { build: "none", visibleOnly: false });
+  }
+  // Tells whether the question can hold the value it has: the value has the JSON shape the question
+  // stores, refers to existing choices, rows or items only and has no key that nobody owns. It runs
+  // the value checks of SurveyModel.setData() on the question's own value, nested values excluded,
+  // with the same defaults: the three checks are on unless a member is set to false,
+  // keepIncorrectValues is ignored.
+  // It never modifies the value or the survey data; clearIncorrectValues() removes what it reports.
+  public isValueCorrect(checks?: IDataVerificationOptions): boolean {
+    return !this.hasIncorrectValue(checks);
+  }
+  // clearIncorrectValues() removes what any check reports, an unknown property included, and keeps
+  // an unknown choice when keepIncorrectValues asks for it.
+  protected getClearIncorrectValuesChecks(): IDataVerificationOptions {
+    return { ...allValueChecks, reportInvalidChoiceValues: !this.isKeepIncorrectValues };
+  }
+  // keepIncorrectValues is not a JSON property of the form, so setData() and isValueCorrect()
+  // ignore it. It is read by clearIncorrectValues() only.
+  protected get isKeepIncorrectValues(): boolean {
+    return !!this.survey?.keepIncorrectValues;
+  }
+  private hasIncorrectValue(checks: IDataVerificationOptions): boolean {
+    const context = createVerifyDataContext(checks);
+    context.stopOnFirst = true;
+    context.pushSegment(this.getValueName());
+    this.verifyOwnValue(context);
+    return context.hasIssues;
+  }
+  // A value that is an instance of a class, a model object or a File for example, is not survey data.
+  // A question may hold it on purpose, the property editors in Survey Creator do, so it is not checked.
+  private isNonDataValue(val: any): boolean {
+    return Helpers.isValueObject(val, true) && val.constructor !== Object && !(val instanceof Date);
+  }
+  // Adds the findings about val. Returns false only when the value as a whole has the wrong shape:
+  // the checks that follow have nothing to add to it. A finding about a part of the value, an
+  // unknown choice, a malformed row, an unknown key, does not stop the chain; an override adds it
+  // and returns true, so that a subclass still reports what it checks (a matrixdropdown reports its
+  // unknown row names even when a row has an unknown cell key).
+  protected verifyValueCore(val: any, context: IVerifyDataContext): boolean {
+    if (context.checks.reportInvalidValueTypes && !this.isDataValueCorrect(val)) {
+      context.addIssue("invalidValueType", undefined, val, this);
+      return false;
+    }
+    return true;
+  }
+  // A value that fails isDataValueCorrect() is not taken by the question, but it stays in the survey data.
+  private getIncorrectValueInData(): any {
+    if (!this.data) return undefined;
+    const val = this.valueFromDataCore(this.data.getValue(this.getValueName()));
+    if (this.isValueEmpty(val, !this.allowSpaceAsAnswer) || this.isDataValueCorrect(val)) return undefined;
+    return val;
+  }
+  private hasIncorrectValueInData(): boolean {
+    return this.getIncorrectValueInData() !== undefined;
+  }
+  // Tells whether a key of an object value belongs to this question: it is its row or its item.
+  protected hasValueKey(key: string): boolean {
+    return false;
+  }
+  // Tells whether a key of one item of an array value belongs to this question: a field it keeps in
+  // the object of a selected item. A dynamic panel or matrix sharing the value knows the key then.
+  public hasValueItemKey(key: string): boolean {
+    return false;
+  }
+  // Several questions may share the same valueName and keep their rows or items in one object.
+  // A key that belongs to any of them is a known key for all of them.
+  protected isValueKeyKnown(key: string): boolean {
+    if (this.hasValueKey(key)) return true;
+    if (!this.survey) return false;
+    const questions = this.survey.questionsByValueName(this.getValueName());
+    if (!Array.isArray(questions)) return false;
+    return questions.some((q: any) => q !== this && q instanceof Question && q.hasValueKey(key));
+  }
+  // Tells whether a value has the JSON shape getValueType() reports.
+  protected isValueOfValueType(val: any): boolean {
+    const type = this.getValueType();
+    if (type === "array") return Array.isArray(val);
+    const isObject = Helpers.isValueObject(val, true) && !(val instanceof Date);
+    if (type === "object") return isObject;
+    if (Array.isArray(val) || isObject) return false;
+    return type !== "number" || Helpers.isNumber(val);
+  }
+  protected clearIncorrectValueInData(): void {
+    if (!this.hasIncorrectValueInData()) return;
+    this.data.setValue(this.getValueName(), undefined, false, this.allowNotifyValueChanged, this.name);
+  }
+  // Compares val with the question value (a value-change check, see Base.isTwoValueEquals).
+  // Unlike isNewValueEqualsToValue, the same array/object instance counts as equal.
+  protected isEqualToValue(val: any): boolean {
+    return this.isTwoValueEquals(this.value, val);
+  }
+  protected isNewValueEqualsToValue(newValue: any): boolean {
+    const val = this.value;
+    if (!this.isEqualToValue(newValue)) return false;
+    const isObj = newValue === val && !!val && (Array.isArray(val) || typeof val === "object");
+    return !isObj;
+  }
+  protected isTextValue(): boolean {
+    return false;
+  }
+  protected getIsInputTextUpdate(): boolean {
+    return !!this.survey ? this.survey.isUpdateValueTextOnTyping : false;
+  }
+  get requireStrictCompare(): boolean { return false; }
+  getExpressionValue(val: any): any { return val; }
+  private getDataLocNotification(): any {
+    return this.isInputTextUpdate ? "text" : false;
+  }
+  public get isInputTextUpdate(): boolean {
+    return this.getIsInputTextUpdate() && this.isTextValue();
+  }
+  private setNewValueInData(newValue: any): void {
+    newValue = this.valueToData(newValue);
+    if (!this.isValueChangedInSurvey) {
+      this.setValueCore(newValue);
+    }
+  }
+  protected getValueCore(): any {
+    return this.questionValue;
+  }
+  protected setValueCore(newValue: any): void {
+    this.setQuestionValue(newValue);
+    if (this.data != null && this.canSetValueToSurvey()) {
+      newValue = this.valueForSurvey;
+      if (!this.canKeepEmptyValue() && this.isValueEmpty(newValue)) {
+        this.runDeletingEmptyValues((): void => this.setValueToData(newValue));
+      } else {
+        this.setValueToData(newValue);
+      }
+    }
+    this.isMouseDown = false;
+  }
+  private setValueToData(newValue: any): void {
+    this.data.setValue(this.getValueName(), newValue, this.getDataLocNotification(), this.allowNotifyValueChanged, this.name);
+  }
+  // data.keepEmptyValues: false for a question whose empty value is never the respondent's own clear.
+  protected canKeepEmptyValue(): boolean {
+    return true;
+  }
+  protected canSetValueToSurvey(): boolean {
+    return true;
+  }
+  /* The storage half of a value assignment and nothing else: the question holds the new value and
+     the reactivity bridge sees it, but the survey hash is not written, the nested objects are not
+     refreshed and no value-changed notification is raised. A question whose records are owned by a
+     data source follows that source through this method - the row or panel the respondent is typing
+     in already holds the new value, and a fan-out would dispose it under the edit. */
+  protected storeQuestionValue(newValue: any): void {
+    this.questionValue = newValue;
+    this.updateIsAnswered();
+  }
+  protected valueFromData(val: any): any { return val; }
+  protected valueToData(val: any): any { return val; }
+  protected convertToCorrectValue(val: any): any { return val; }
+  protected onValueChanged(): void { }
+  protected isMouseDown: boolean;
+  onMouseDown(): void {
+    this.isMouseDown = true;
+  }
+  protected setNewComment(newValue: string): void {
+    if (this.questionComment === newValue) return;
+    if (!this.isUpdatingValueFromSurvey && this.survey) {
+      newValue = this.survey.questionValueChanging(this, newValue, true);
+    }
+    if (this.questionComment === newValue) return;
+    const oldValue = this.questionComment;
+    this.questionComment = newValue;
+    this.setCommentIntoData(newValue);
+    if (!this.isUpdatingValueFromSurvey && this.survey) {
+      this.survey.questionValueChanged(this, oldValue, true);
+    }
+  }
+  protected setCommentIntoData(newValue: string): void {
+    if (this.data != null) {
+      this.data.setComment(
+        this.getValueName(),
+        newValue,
+        this.getIsInputTextUpdate() ? "text" : false
+      );
+    }
+  }
+  protected getValidName(name: string): string {
+    return makeNameValid(super.getValidName(name));
+  }
+  //IQuestion
+  protected isUpdatingValueFromSurvey: boolean;
+  updateValueFromSurvey(newValue: any, clearData: boolean = false): void {
+    newValue = this.getUnbindValue(newValue);
+    newValue = this.valueFromDataCore(newValue);
+    if (!this.checkIsValueCorrect(newValue)) return;
+    const isEmpty = this.isValueEmpty(newValue);
+    this.isUpdatingValueFromSurvey = true;
+    try {
+      if (!isEmpty && this.defaultValueExpression) {
+        this.setDefaultValueCore((val: any): void => {
+          const isDefault = this.isTwoValueEquals(newValue, val);
+          this.updateValueFromSurveyCore(newValue, isDefault);
+          // A value assigned via survey.data/mergeData that differs from the default one is set directly,
+          // even if the question already holds it (e.g. the initial default equals the loaded value).
+          if (!isDefault && this.survey?.isSettingData()) {
+            this.setValueChangedDirectly(true);
+          }
+        });
+      } else {
+        this.updateValueFromSurveyCore(newValue, <any>this.data !== <any>this.getSurvey());
+        if (clearData && isEmpty) {
+          this.isValueChangedDirectly = false;
+        }
+        if (isEmpty) {
+          this.updateBindingsOnClearFromSurveyCore();
+        }
+      }
+    } finally {
+      this.isUpdatingValueFromSurvey = false;
+    }
+    this.updateDependedQuestions();
+    this.updateIsAnswered();
+  }
+  protected canUpdateBindings(): boolean { return !this.isUpdatingValueFromSurvey; }
+  private updateBindingsOnClearFromSurveyCore(): void {
+    const surveyData = this.data;
+    if (surveyData && !this.isBindingEmpty()) {
+      this.bindings.getNames().forEach(name => {
+        const valueName = this.bindings.getValueNameByPropertyName(name);
+        const val = surveyData.getValue(valueName);
+        if (!this.isValueEmpty(val)) {
+          this.updateBindingProp(name, val);
+        }
+      });
+    }
+  }
+  private updateValueFromSurveyCore(newValue: any, viaDefaultVal: boolean): void {
+    this.defaultValueChangeScope.run(viaDefaultVal, (): void => {
+      newValue = this.valueFromData(newValue);
+      const isEqual = this.isTwoValueEquals(this.questionValue, this.convertToCorrectValue(newValue));
+      this.setQuestionValue(newValue);
+      if (!isEqual) {
+        this.resetSingleInput();
+        this.revalidateOnValueChangedFromSurvey();
+      }
+    });
+  }
+  private revalidateOnValueChangedFromSurvey(): void {
+    if (!this.survey || this.isLoadingFromJson || !this.survey.isSettingData() ||
+      this.getAllErrors().length === 0) return;
+    const isOnValueChanging = this.validationCallbacks.isValidateOnValueChanging;
+    this.validate(true, false, !isOnValueChanging, undefined, isOnValueChanging);
+  }
+  updateCommentFromSurvey(newValue: any): any {
+    this.questionComment = newValue;
+  }
+  protected onChangeQuestionValue(newValue: any): void { }
+  // Default values (defaultValue and defaultValueExpression) apply until the value is set or cleared directly
+  // by an end user, in code, or by loading data that differs from the default.
+  private canApplyDefaultValue(): boolean {
+    return !this.isValueChangedDirectly;
+  }
+  protected setValueChangedDirectly(val: boolean): void {
+    this.isValueChangedDirectly = val;
+    if (!!this.setValueChangedDirectlyCallback) {
+      this.setValueChangedDirectlyCallback(val);
+    }
+  }
+  protected setQuestionValue(newValue: any, updateIsAnswered: boolean = true): void {
+    newValue = this.convertToCorrectValue(newValue);
+    const isEqual = this.isTwoValueEquals(this.questionValue, newValue);
+    if (!isEqual && !this.isChangingViaDefaultValue && !this.isParentChangingViaDefaultValue) {
+      this.setValueChangedDirectly(true);
+    }
+    this.questionValue = newValue;
+    if (!isEqual) {
+      this.onChangeQuestionValue(newValue);
+    }
+    !isEqual && this.allowNotifyValueChanged &&
+      this.fireCallback(this.valueChangedCallback);
+    if (updateIsAnswered)this.updateIsAnswered();
+  }
+  private get isParentChangingViaDefaultValue(): boolean {
+    return (<any>this.data)?.isChangingViaDefaultValue === true;
+  }
+  onSurveyValueChanged(newValue: any): void { }
+  public setVisibleIndex(val: number): number {
+    if (this.isVisibleIndexNegative(val)) {
+      val = -1;
+    }
+    this.setPropertyValue("visibleIndex", val);
+    this.resetPropertyValue("no");
+    return val < 0 ? 0 : 1;
+  }
+  protected isVisibleIndexNegative(val: number): boolean {
+    return val < 0 || !this.isVisible ||
+      (!this.getHasTitleOnCalcNo() && !settings.numbering.includeQuestionsWithHiddenTitle) ||
+      (!this.showNumber && !settings.numbering.includeQuestionsWithHiddenNumber);
+  }
+  public removeElement(element: IElement): boolean {
+    return false;
+  }
+  // Obsolete
+  supportGoNextPageAutomatic(): boolean { return this.supportAutoAdvance(); }
+  public supportAutoAdvance(): boolean {
+    return false;
+  }
+  /**
+   * Specifies whether to display keyboard shortcut hints for this question.
+   *
+   * Default value: `undefined` (inherits the survey's [`showKeyboardHints`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#showKeyboardHints) setting)
+   *
+   * Hints describe available keyboard actions, such as selecting choices or pressing Enter to continue. Displayed hints depend on the question type and settings.
+   *
+   * Keyboard hints are hidden on touch devices, in read-only or preview mode, for collapsed questions, and in matrix cells.
+   *
+   * [Demo: Keyboard Hints](https://surveyjs.io/form-library/examples/automatically-move-to-next-page-if-answer-selected/ (linkStyle))
+   * @since 3.2.4
+   */
+  @property() showKeyboardHints: boolean | undefined;
+  public getKeyboardHintModel(): KeyboardHintModel {
+    const hints = this.canShowKeyboardHints() ? this.getKeyboardHintsCore() : [];
+    return new KeyboardHintModel(this, hints);
+  }
+  // The renderers mount the hint row on this, and the row stays outside the collapsible content.
+  // With a single input on screen the inner question owns the keys, so the outer question yields.
+  public canShowKeyboardHints(): boolean {
+    const survey = this.survey;
+    if (!survey || !(this.showKeyboardHints ?? survey.showKeyboardHints === true)) return false;
+    return !IsTouch && !this.isDesignMode && !this.isReadOnly && !this.inMatrixMode && !this.isCollapsed && !this.singleInputQuestion;
+  }
+  // Answers from the question's own settings: survey state and responsive rendering must not hide the property.
+  public supportsKeyboardHints(): boolean {
+    return false;
+  }
+  protected getKeyboardHintsCore(): IKeyboardHintData[] {
+    return [];
+  }
+  // Set only while Enter commits the current value. tryGoNextPageAutomatic runs on every
+  // value change, so multi-value questions stay opted out until this flag is raised.
+  private autoAdvanceRequestScope = new Scope();
+  protected get isAutoAdvanceRequested(): boolean { return this.autoAdvanceRequestScope.isActive; }
+  // Emptiness is checked separately: comment writes the textarea text before deciding to advance.
+  protected isAutoAdvanceEnter(event: any): boolean {
+    if (!event || (event.key !== "Enter" && event.keyCode !== 13)) return false;
+    if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return false;
+    if (this.isDesignMode || this.isInputReadOnly) return false;
+    return this.isSurveyAutoAdvanceEnabled;
+  }
+  protected canCommitAutoAdvanceOnEnter(event: any): boolean {
+    return this.isAutoAdvanceEnter(event) && !this.isEmpty();
+  }
+  protected get isSurveyAutoAdvanceEnabled(): boolean {
+    return (this.survey as SurveyModel)?.autoAdvanceEnabled === true;
+  }
+  // getQuestionByValueName only sees top-level questions. A nested question with the same
+  // name must not advance on behalf of that other question.
+  protected get isAutoAdvanceOwner(): boolean {
+    return (this.survey as SurveyModel)?.getQuestionByValueName(this.getValueName()) === this;
+  }
+  // A question nested in a choice item is found by value name, but it is not in the page's question
+  // list, so the survey advances for it only when it is the single input on screen.
+  public canAdvanceOnEnter(): boolean {
+    if (!this.isSurveyAutoAdvanceEnabled || !this.isAutoAdvanceOwner) return false;
+    return !this.parentQuestion || this.parentQuestion.singleInputQuestion === this;
+  }
+  protected requestAutoAdvance(): boolean {
+    if (!this.isAutoAdvanceOwner) return false;
+    return this.autoAdvanceRequestScope.run(() => (this.survey as SurveyModel).tryGoNextPageAutomatic(this.getValueName()));
+  }
+  protected commitAutoAdvance(event?: any): void {
+    if (event?.preventDefault) event.preventDefault();
+    this.requestAutoAdvance();
+  }
+  public supportGoNextPageError(): boolean {
+    return true;
+  }
+  /**
+   * Removes values that cannot be assigned to this question, for example, choices unlisted in the `choices` array.
+   *
+   * Call this method after you assign new question values in code to ensure that they are acceptable.
+   *
+   * > This method does not remove values that fail validation. Call the `validate()` method to validate newly assigned values.
+   *
+   * @see validate
+   */
+  public clearIncorrectValues(): void {
+    this.runDeletingEmptyValues((): void => {
+      this.clearIncorrectOwnValue();
+      this.clearIncorrectNestedValues();
+    });
+  }
+  // The question's own value, nested values excluded.
+  protected clearIncorrectOwnValue(): void {
+    // Clearing is not affected by the checks of validate(): an unknown key is removed even when
+    // nobody asks validate() to report it. keepIncorrectValues is still honored by the question types.
+    if (this.isValueCorrectToClear()) return;
+    this.clearIncorrectValueInData();
+    if (!this.isEmpty()) {
+      this.clearIncorrectValuesCore();
+    }
+  }
+  // The values of the nested instances, wherever they live: what setData() reports there, this removes.
+  // The total row is computed and is not cleaned.
+  protected clearIncorrectNestedValues(): void {
+    this.forEachNestedElement(info => {
+      if (info.role !== "total") info.element.clearIncorrectValues();
+    }, { build: "none", visibleOnly: false });
+  }
+  protected isValueCorrectToClear(): boolean {
+    return !this.hasIncorrectValue(this.getClearIncorrectValuesChecks());
+  }
+  // A question that can drop the incorrect part of its value only, an unknown choice or row, overrides this function.
+  protected clearIncorrectValuesCore(): void {
+    this.clearValue(true);
+  }
+  public clearOnDeletingContainer(): void { }
+  /**
+   * Empties the `errors` array.
+   * @see errors
+   */
+  public clearErrors(): void {
+    this.errors = [];
+  }
+  public clearUnusedValues(): void { }
+  onAnyValueChanged(name: string, questionName: string): void {
+    this.validateOnAnyQuestionValueChanged(name, questionName);
+  }
+  checkBindings(valueName: string, value: any): void {
+    if (this.bindings.isEmpty() || !this.data) return;
+    var props = this.bindings.getPropertiesByValueName(valueName);
+    for (var i = 0; i < props.length; i++) {
+      const propName = props[i];
+      if (this.isValueEmpty(value) && Helpers.isNumber(this[propName])) {
+        value = 0;
+      }
+      this.updateBindingProp(propName, value);
+    }
+  }
+  protected updateBindingProp(propName: string, value: any): void {
+    this[propName] = value;
+  }
+  public getComponentName(): string {
+    const viewComponentName = this.getViewModeComponentName();
+    if (viewComponentName) return viewComponentName;
+    return RendererFactory.Instance.getRendererByQuestion(this);
+  }
+  protected get supportsQuestionView(): boolean {
+    return true;
+  }
+  protected getViewModeComponentName(): string | undefined {
+    if (!this.isViewMode || !this.supportsQuestionView) return undefined;
+    const specific = RendererFactory.Instance.getRenderer(this.getType(), "view");
+    if (specific !== "default") return specific;
+    const common = RendererFactory.Instance.getRenderer("question", "view");
+    if (common !== "default") return common;
+    return undefined;
+  }
+
+  public isDefaultRendering(): boolean {
+    return (
+      !!this.customWidget ||
+      this.getComponentName() === "default"
+    );
+  }
+  @property() renderAs: string;
+  @property({ defaultValue: false }) inMatrixMode: boolean;
+
+  //ISurveyErrorOwner
+  getErrorCustomText(text: string, error: SurveyError): string {
+    if (!!this.survey) return this.survey.getSurveyErrorCustomText(this, text, error);
+    return text;
+  }
+  createRegexValidator(validator: Base, pattern: string, flags: string): RegExp {
+    return this.survey?.createRegexValidator(this, validator, pattern, flags) || new RegExp(pattern, flags);
+  }
+  //IValidatorOwner
+  getValidatorTitle(): string {
+    return null;
+  }
+  get validatedValue(): any {
+    return this.value;
+  }
+  set validatedValue(val: any) {
+    this.value = val;
+  }
+  public processPopupVisiblilityChanged(popupModel: PopupModel, visible: boolean): void {
+    this.survey.processPopupVisiblityChanged(this, popupModel, visible);
+  }
+  public processOpenDropdownMenu(options: IDropdownMenuOptions): void {
+    this.survey.processOpenDropdownMenu(this, options);
+  }
+
+  protected onTextKeyDownHandler(event: any) {
+    if (event.keyCode === 13) {
+      (this.survey as SurveyModel).questionEditFinishCallback(this, event);
+    }
+  }
+
+  public needResponsiveWidth() {
+    return false;
+  }
+  //responsiveness methods
+  protected supportResponsiveness(): boolean {
+    return false;
+  }
+
+  protected needResponsiveness(): boolean {
+    return this.supportResponsiveness() && !this.isDesignMode;
+  }
+
+  protected checkForResponsiveness(el: HTMLElement): void {
+    if (this.needResponsiveness()) {
+      if (this.isCollapsed) {
+        const onStateChanged = () => {
+          if (this.isExpanded) {
+            this.initResponsiveness(el);
+            this.unregisterPropertyChangedHandlers(["state"], "for-responsiveness");
+          }
+        };
+        this.registerPropertyChangedHandlers(["state"], onStateChanged, "for-responsiveness");
+      } else {
+        this.initResponsiveness(el);
+      }
+    }
+  }
+  private resizeObserver: ResizeObserver;
+
+  protected getObservedElementSelector(): string {
+    return ".sd-scrollable-container";
+  }
+
+  protected onMobileChanged() {
+    this.onMobileChangedCallback && this.onMobileChangedCallback();
+  }
+
+  private onMobileChangedCallback: () => void;
+
+  public triggerResponsiveness(hard: boolean = true): void {
+    if (this.triggerResponsivenessCallback) {
+      this.triggerResponsivenessCallback(hard);
+    }
+  }
+  private triggerResponsivenessCallback: (hard: boolean) => void;
+  private initResponsiveness(el: HTMLElement) {
+    if (!DomDocumentHelper.isAvailable()) { return; }
+    this.destroyResizeObserver();
+    if (!!el && this.isDefaultRendering()) {
+      const scrollableSelector = this.getObservedElementSelector();
+      if (!scrollableSelector) return;
+      const defaultRootEl = el.querySelector(scrollableSelector);
+      if (!defaultRootEl) return;
+      let isProcessed = false;
+      let requiredWidth: number = undefined;
+      this.triggerResponsivenessCallback = (hard: boolean) => {
+        if (hard) {
+          requiredWidth = undefined;
+          this.renderAs = "default";
+          isProcessed = false;
+        }
+        const callback = () => {
+          const rootEl = <HTMLElement>el.querySelector(scrollableSelector);
+          if (this.isDefaultRendering()) {
+            requiredWidth = rootEl.scrollWidth;
+          }
+          if (isProcessed || !isContainerVisible(rootEl)) {
+            isProcessed = false;
+          } else {
+            const availableWidth = getElementWidth(rootEl);
+            isProcessed = this.processResponsiveness(requiredWidth, availableWidth);
+          }
+        };
+        if (hard) {
+          setTimeout(callback, 1);
+        } else {
+          callback();
+        }
+
+      };
+      this.resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+        DomWindowHelper.requestAnimationFrame((): void | undefined => {
+          this.triggerResponsiveness(false);
+        });
+      });
+      this.onMobileChangedCallback = () => {
+        setTimeout(() => {
+          const rootEl = <HTMLElement>el.querySelector(scrollableSelector);
+          this.processResponsiveness(requiredWidth, getElementWidth(rootEl));
+        }, 0);
+      };
+      this.resizeObserver.observe(el);
+    }
+  }
+
+  protected getCompactRenderAs(): string {
+    return "default";
+  }
+  protected getDesktopRenderAs(): string {
+    return "default";
+  }
+  protected onBeforeSetCompactRenderer(): void { }
+  protected onBeforeSetDesktopRenderer(): void { }
+  protected processResponsiveness(requiredWidth: number, availableWidth: number): any {
+    availableWidth = Math.round(availableWidth);
+    if (Math.abs(requiredWidth - availableWidth) > 2) {
+      const oldRenderAs = this.renderAs;
+      if (requiredWidth > availableWidth) {
+        this.onBeforeSetCompactRenderer();
+        this.renderAs = this.getCompactRenderAs();
+      } else {
+        this.onBeforeSetDesktopRenderer();
+        this.renderAs = this.getDesktopRenderAs();
+      }
+      return oldRenderAs !== this.renderAs;
+    }
+    return false;
+  }
+  public destroyResizeObserver(): void {
+    if (!!this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = undefined;
+      this.onMobileChangedCallback = undefined;
+      this.triggerResponsivenessCallback = undefined;
+      this.renderAs = this.getDesktopRenderAs();
+    }
+  }
+  public dispose(): void {
+    super.dispose();
+    this.resetDependedQuestions();
+    this.destroyResizeObserver();
+  }
+  private resetDependedQuestions(): void {
+    for (var i = 0; i < this.dependedQuestions.length; i++) {
+      this.dependedQuestions[i].resetDependedQuestion();
+    }
+  }
+  private getValidatorVariableNames(): Array<string> {
+    const res: Array<string> = [];
+    const validators = this.getPropertyValue("validators");
+    if (!Array.isArray(validators) || validators.length === 0) return res;
+    const ownValueName = this.getValueName();
+    const panelSelf = settings.expressionVariables.panel + "." + ownValueName;
+    const rowSelf = settings.expressionVariables.row + "." + ownValueName;
+    for (let i = 0; i < validators.length; i++) {
+      const v = validators[i];
+      if (v.getType() === "expressionvalidator" && !!(v as any).expression) {
+        const runner = new ExpressionRunner((v as any).expression);
+        const vars = runner.getVariables();
+        for (let j = 0; j < vars.length; j++) {
+          const varName = vars[j];
+          if (varName !== ownValueName && varName !== panelSelf && varName !== rowSelf && res.indexOf(varName) < 0) {
+            res.push(varName);
+          }
+        }
+      }
+    }
+    return res;
+  }
+  private validationDependentNames: Array<string>;
+  private getValidationDependentNames(): Array<string> {
+    if (!this.validationDependentNames) {
+      this.validationDependentNames = this.getValidatorVariableNames();
+    }
+    return this.validationDependentNames;
+  }
+  private validateOnAnyQuestionValueChanged(name: string, questionName: string): void {
+    if (!this.survey) return;
+    const deps = this.getValidationDependentNames();
+    if (deps.length === 0) return;
+    const prefix = name + ".";
+    if (deps.indexOf(name) < 0 && !deps.some(d => d.indexOf(prefix) === 0)) return;
+    let hasToValidate = this.getAllErrors().length > 0;
+    if (!hasToValidate && this.validationCallbacks.isValidateOnValueChanged) {
+      const changedQuestion = <Question>this.data.findQuestionByName(questionName);
+      hasToValidate = !changedQuestion || changedQuestion.getAllErrors().length == 0;
+    }
+    if (hasToValidate) {
+      this.validate(true, false, true);
+    }
+  }
+  public resetValidationDependencies(): void {
+    this.validationDependentNames = undefined;
+  }
+
+  //a11y
+  public get isNewA11yStructure(): boolean {
+    return false;
+  }
+  public get ariaLabel(): string {
+    if (this.isNewA11yStructure || (this.hasTitle && !this.parentQuestion)) return null;
+    return this.locTitle.renderedHtml;
+  }
+  public get ariaRole(): string {
+    if (this.isNewA11yStructure) return null;
+
+    return "textbox";
+  }
+  public get ariaRequired() {
+    if (this.isNewA11yStructure) return null;
+
+    return this.isRenderedRequired ? "true" : "false";
+  }
+  public get ariaInvalid() {
+    if (this.isNewA11yStructure) return null;
+
+    return this.hasCssError() ? "true" : "false";
+  }
+  public get ariaLabelledBy(): string {
+    if (this.isNewA11yStructure || !this.hasTitle || this.parentQuestion) return null;
+    return this.ariaTitleId;
+  }
+  public get ariaDescribedBy(): string {
+    if (this.isNewA11yStructure) return null;
+
+    if (this.hasTitle && this.hasDescription && this.getDescriptionLocation() !== "hidden") {
+      return this.ariaDescriptionId;
+    } else {
+      return null;
+    }
+  }
+
+  protected getContentAriaHidden(): boolean {
+    return null;
+  }
+  public get contentAriaHidden(): boolean {
+    return this.getContentAriaHidden();
+  }
+
+  public get ariaErrormessage(): string {
+    if (this.isNewA11yStructure) return null;
+
+    return this.hasCssError() ? this.renderedId + "_errors" : null;
+  }
+  //EO a11y
+
+  //new a11y
+  public get a11y_input_ariaRole(): string {
+    return null;
+  }
+  public get a11y_input_ariaRequired(): "true" | "false" {
+    return this.isRenderedRequired ? "true" : "false";
+  }
+  public get a11y_input_ariaInvalid(): "true" | "false" {
+    return this.hasCssError() ? "true" : "false";
+  }
+  public get a11y_input_ariaLabel(): string {
+    if (this.hasTitle && !this.parentQuestion) {
+      return null;
+    } else {
+      return this.locTitle.renderedHtml;
+    }
+  }
+  public get a11y_input_ariaLabelledBy(): string {
+    if (this.hasTitle && !this.parentQuestion) {
+      return this.ariaTitleId;
+    } else {
+      return null;
+    }
+  }
+  public get a11y_input_ariaDescribedBy(): string {
+    let result = null;
+
+    if (this.hasCssError()) {
+      result = this.renderedId + "_errors";
+    } else if (this.hasTitle && !this.parentQuestion && this.hasDescription && this.getDescriptionLocation() !== "hidden") {
+      result = this.ariaDescriptionId;
+    }
+
+    return result;
+  }
+  public get a11y_input_ariaErrormessage(): string {
+    return null;
+    //return this.hasCssError() ? this.id + "_errors" : null; // due to https://cerovac.com/a11y/2024/06/support-for-aria-errormessage-is-getting-better-but-still-not-there-yet/
+  }
+  //EO new a11y
+
+  public get dragDropMatrixAttribute(): string {
+    return null;
+  }
+
+  @property() randomize: boolean;
+  @property() randomizeCategory: string;
+}
+function makeNameValid(str: string): string {
+  if (!str) return str;
+  str = str.trim().replace(/[\{\}]+/g, "");
+  while(!!str && str[0] === settings.expressionDisableConversionChar) {
+    str = str.substring(1);
+  }
+  return str;
+}
+
+Serializer.addClass("question", [
+  { name: "!name", onSettingValue: (obj: any, val: any): any => { return makeNameValid(val); } },
+  {
+    name: "state",
+    default: "default",
+    choices: ["default", "collapsed", "expanded"],
+  },
+  { name: "visible:switch", default: true, overridingProperty: "visibleIf" },
+  { name: "useDisplayValuesInDynamicTexts:boolean", alternativeName: "useDisplayValuesInTitle", default: true, layout: "row" },
+  "visibleIf:condition",
+  { name: "width" },
+  { name: "minWidth" },
+  { name: "maxWidth" },
+  {
+    name: "colSpan:number", visible: false,
+    onSerializeValue: (obj) => { return obj.getPropertyValue("colSpan"); },
+  },
+  {
+    name: "effectiveColSpan:number", minValue: 1, isSerializable: false,
+    visibleIf: function (obj: any) { return !!obj && !!obj.survey && obj.survey.gridLayoutEnabled; }
+  },
+  { name: "startWithNewLine:boolean", default: true, layout: "row" },
+  { name: "indent:number", default: 0, choices: [0, 1, 2, 3], layout: "row" },
+  {
+    name: "page",
+    isSerializable: false,
+    visibleIf: function (obj: any) {
+      var survey = obj ? obj.survey : null;
+      return !survey || !survey.pages || survey.pages.length > 1;
+    },
+    choices: function (obj: any) {
+      var survey = obj ? obj.survey : null;
+      return survey
+        ? survey.pages.map((p: any) => {
+          return { value: p.name, text: p.title };
+        })
+        : [];
+    },
+  },
+  {
+    name: "title:text", serializationProperty: "locTitle", layout: "row", dependsOn: "name",
+    onPropertyEditorUpdate: function (obj: any, editor: any) {
+      if (!!obj && !!editor) {
+        editor.placeholder = obj.locTitle.getPlaceholder();
+      }
+    }
+  },
+  {
+    name: "titleLocation",
+    default: "default",
+    choices: ["default", "top", "bottom", "left", "hidden"],
+    layout: "row",
+  },
+  {
+    name: "showTitle:boolean",
+    isSerializable: false,
+    dependsOn: "titleLocation"
+  },
+  {
+    name: "description:text",
+    serializationProperty: "locDescription",
+    layout: "row",
+  },
+  {
+    name: "descriptionLocation",
+    default: "default",
+    choices: ["default", "underInput", "underTitle", "hidden"],
+  },
+  {
+    name: "showNumber:boolean",
+    dependsOn: "titleLocation",
+    default: true,
+    visibleIf: function (obj: any) {
+      if (!obj) {
+        return true;
+      }
+      if ((<Question>obj).titleLocation === "hidden") {
+        return false;
+      }
+      var parent: PanelModel = obj ? obj.parent : null;
+      var numberingAllowedByParent =
+        !parent || parent.showQuestionNumbers !== "off";
+      if (!numberingAllowedByParent) {
+        return false;
+      }
+      var survey: SurveyModel = obj ? obj.survey : null;
+      return (
+        !survey ||
+        survey.showQuestionNumbers !== "off" ||
+        (!!parent && parent.showQuestionNumbers === "onpanel")
+      );
+    },
+  },
+  { name: "hideNumber:boolean", visible: false, isSerializable: false },
+  { name: "valueName", onSettingValue: (obj: any, val: any): any => { return makeNameValid(val); } },
+  "enableIf:condition",
+  "resetValueIf:condition",
+  "setValueIf:condition",
+  "setValueExpression:expression",
+  "defaultValue:value",
+  "defaultValueExpression:expression",
+  "correctAnswer:value",
+  {
+    name: "clearIfInvisible",
+    default: "default",
+    choices: ["default", "none", "onComplete", "onHidden", "onHiddenContainer"],
+  },
+  { name: "isRequired:switch", overridingProperty: "requiredIf" },
+  "requiredIf:condition",
+  {
+    name: "requiredErrorText:text",
+    serializationProperty: "locRequiredErrorText",
+  },
+  { name: "errorLocation", default: "default", choices: ["default", "top", "bottom"] },
+  { name: "readOnly:switch", overridingProperty: "enableIf" },
+  getReadOnlyModePropertyInfo(),
+  {
+    name: "validators:validators",
+    baseClassName: "surveyvalidator",
+    classNamePart: "validator",
+  },
+  {
+    name: "bindings:bindings",
+    serializationProperty: "bindings",
+    isSerializableFunc: (obj: any) => !obj.isBindingEmpty(),
+    visibleIf: function (obj: any) {
+      return obj.bindings.getNames().length > 0;
+    },
+  },
+  { name: "renderAs", default: "default", visible: false },
+  { name: "showCommentArea:switch", visible: false, layout: "row", alternativeName: "hasComment" },
+  {
+    name: "commentText",
+    dependsOn: "showCommentArea",
+    visibleIf: function (obj: any) {
+      return obj.showCommentArea;
+    },
+    serializationProperty: "locCommentText"
+  },
+  {
+    name: "commentPlaceholder",
+    alternativeName: "commentPlaceHolder",
+    serializationProperty: "locCommentPlaceholder",
+    dependsOn: "showCommentArea",
+    visibleIf: function (obj: any) {
+      return obj.showCommentArea;
+    }
+  },
+  { name: "defaultDisplayValue", serializationProperty: "locDefaultDisplayValue" },
+  { name: "randomize:boolean", default: true, visible: false, locationInTable: "detail" },
+  { name: "randomizeCategory:string", visible: false, locationInTable: "detail" },
+  {
+    name: "showKeyboardHints:boolean",
+    defaultFunc: () => undefined,
+    visibleIf: (obj: any): boolean => !!obj.supportsKeyboardHints && obj.supportsKeyboardHints() && !obj.isContentElement
+  },
+  { name: "allowClear:boolean" },
+]);
+Serializer.addAlterNativeClassName("question", "questionbase");

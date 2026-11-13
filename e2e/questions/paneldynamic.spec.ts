@@ -1,0 +1,918 @@
+import { frameworks, url, initSurvey, getSurveyResult, getQuestionJson, getVisibleListItemByText, test, expect, getButtonByText } from "../helper";
+
+const title = "paneldynamic";
+
+const json = {
+  pages: [
+    {
+      name: "page1",
+      elements: [
+        {
+          type: "paneldynamic",
+          name: "relatives",
+          title: "Please enter all blood relatives you know",
+          displayMode: "carousel",
+          defaultValue: [
+            { relativeType: "father" },
+            { relativeType: "mother" },
+          ],
+          templateTitle: "Information about: {panel.relativeType}",
+          templateElements: [
+            {
+              name: "relativeType",
+              type: "dropdown",
+              title: "Relative",
+              choices: [
+                "father",
+                "mother",
+                "brother",
+                "sister",
+                "son",
+                "daughter",
+              ],
+              isRequired: true,
+            },
+            {
+              name: "isalive",
+              type: "radiogroup",
+              title: "Alive?",
+              startWithNewLine: false,
+              isRequired: true,
+              colCount: 0,
+              choices: ["Yes", "No"],
+            },
+            {
+              name: "liveage",
+              type: "dropdown",
+              title: "Age",
+              isRequired: true,
+              startWithNewLine: false,
+              visibleIf: "{panel.isalive} = 'Yes'",
+              choicesMin: 1,
+              choicesMax: 115,
+            },
+            {
+              name: "deceasedage",
+              type: "dropdown",
+              title: "Deceased Age",
+              isRequired: true,
+              startWithNewLine: false,
+              visibleIf: "{panel.isalive} = 'No'",
+              choices: [
+                {
+                  value: -1,
+                  text: "Unknown",
+                },
+              ],
+              choicesMin: 1,
+              choicesMax: 115,
+            },
+            {
+              name: "causeofdeathknown",
+              type: "radiogroup",
+              title: "Cause of Death Known?",
+              isRequired: true,
+              colCount: 0,
+              startWithNewLine: false,
+              visibleIf: "{panel.isalive} = 'No'",
+              choices: ["Yes", "No"],
+            },
+            {
+              name: "causeofdeath",
+              type: "text",
+              title: "Cause of Death",
+              isRequired: true,
+              startWithNewLine: false,
+              visibleIf:
+                "{panel.isalive} = 'No' and {panel.causeofdeathknown} = 'Yes'",
+            },
+            {
+              type: "panel",
+              name: "moreInfo",
+              state: "expanded",
+              title: "Detail Information about: {panel.relativeType}",
+              elements: [
+                {
+                  type: "matrixdynamic",
+                  name: "relativeillness",
+                  title: "Describe the illness or condition.",
+                  rowCount: 0,
+                  columns: [
+                    {
+                      name: "illness",
+                      cellType: "dropdown",
+                      title: "Illness/Condition",
+                      choices: [
+                        "Cancer",
+                        "Heart Disease",
+                        "Diabetes",
+                        "Stroke/TIA",
+                        "High Blood Pressure",
+                        "High Cholesterol or Triglycerides",
+                        "Liver Disease",
+                        "Alcohol or Drug Abuse",
+                        "Anxiety, Depression or Psychiatric Illness",
+                        "Tuberculosis",
+                        "Anesthesia Complications",
+                        "Genetic Disorder",
+                        "Other - describe",
+                      ],
+                      isRequired: true,
+                    },
+                    {
+                      name: "description",
+                      cellType: "text",
+                      title: "Describe",
+                      isRequired: true,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          addPanelText: "Add a blood relative",
+          removePanelText: "Remove the relative",
+        },
+      ],
+    },
+  ],
+};
+
+const json3 = {
+  autoFocusFirstQuestion: true,
+  elements: [
+    {
+      type: "matrixdynamic",
+      name: "matrix",
+      valueName: "a",
+      columns: [
+        { cellType: "text", name: "col1" }
+      ]
+    },
+    {
+      type: "paneldynamic",
+      name: "panel",
+      valueName: "a",
+      templateElements: [
+        { type: "text", name: "q1" },
+        { type: "text", name: "q2" },
+      ],
+      templateVisibleIf: "{panel.col1}='a'",
+      displayMode: "tab",
+      templateTabTitle: "#{visiblePanelIndex}-{panelIndex}"
+    },
+  ],
+};
+
+frameworks.forEach((framework) => {
+  test.describe(`${framework} ${title}`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.goto(`${url}${framework}`);
+    });
+
+    test("fill panel dynamic and add new panel", async ({ page }) => {
+      await initSurvey(page, framework, json);
+      const relativeTypeDropdown = page.locator("div[data-name='relativeType'] .sd-dropdown");
+      const ageDropdown = page.locator("div[data-name='liveage'] .sd-dropdown");
+      const deceasedAgeDropdown = page.locator("div[data-name='deceasedage'] .sd-dropdown");
+      const relativeillnessDropdown = page.locator("div[data-name='relativeillness'] .sd-dropdown");
+
+      const nextButtonSelector = getButtonByText(page, "Next");
+      const prevButtonSelector = getButtonByText(page, "Previous");
+
+      const addRowSelector = page.locator("button").locator("span").filter({ hasText: "Add Row" });
+
+      await page.locator("label").filter({ hasText: "Yes" }).locator("span").first().click();
+
+      await ageDropdown.click();
+      await getVisibleListItemByText(page, "72").click();
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      await expect(ageDropdown.locator(".sv-string-viewer")).toHaveText("72");
+
+      await nextButtonSelector.click();
+      await page.locator("label").filter({ hasText: "Yes" }).locator("span").first().click();
+
+      await ageDropdown.click();
+      await getVisibleListItemByText(page, "65").click();
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      await expect(ageDropdown.locator(".sv-string-viewer")).toHaveText("65");
+
+      await page.locator(".sd-paneldynamic__add-btn").filter({ hasText: "Add a blood relative" }).click();
+
+      await relativeTypeDropdown.click();
+      await getVisibleListItemByText(page, "sister").click();
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      await expect(relativeTypeDropdown.locator(".sv-string-viewer")).toHaveText("sister");
+      await page.locator("label").filter({ hasText: "No" }).locator("span").first().click();
+
+      await deceasedAgeDropdown.click();
+      await getVisibleListItemByText(page, "42").click();
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      await expect(deceasedAgeDropdown.locator(".sv-string-viewer")).toHaveText("42");
+      await page.getByLabel("Cause of Death Known?").locator("div").filter({ hasText: "No" }).click();
+      await prevButtonSelector.click();
+      await prevButtonSelector.click();
+
+      await addRowSelector.click();
+
+      await relativeillnessDropdown.click();
+      await getVisibleListItemByText(page, "Diabetes").click();
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+      await expect(relativeillnessDropdown.locator(".sv-string-viewer")).toHaveText("Diabetes");
+      await page.locator("td[title=\"Describe\"] input[type=\"text\"]").fill("Type 2");
+      await page.locator("body").click({ position: { x: 1, y: 1 } });
+
+      await nextButtonSelector.click();
+      await page.getByRole("button", { name: "Remove the relative" }).click();
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({
+        relatives: [
+          {
+            relativeType: "father",
+            isalive: "Yes",
+            liveage: 72,
+            relativeillness: [
+              {
+                illness: "Diabetes",
+                description: "Type 2",
+              },
+            ],
+          },
+          {
+            relativeType: "sister",
+            isalive: "No",
+            causeofdeathknown: "No",
+            deceasedage: 42
+          },
+        ],
+      });
+    });
+
+    test("click on panel title state editable", async ({ page }) => {
+      await initSurvey(page, framework, json, true);
+      const newTitle = "MyText";
+      const outerSelector = ".sd-question__title";
+      const innerSelector = ".sv-string-editor";
+      await page.locator(outerSelector).first().click();
+      await page.locator(outerSelector + " " + innerSelector).first().fill(newTitle);
+      await page.locator("body").click({ position: { x: 0, y: 0 } });
+
+      const questionJson = JSON.parse(await getQuestionJson(page));
+      expect(questionJson.title).toBe(newTitle);
+    });
+
+    test("Add new panels", async ({ page }) => {
+      const json2 = {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            displayMode: "carousel",
+            progressBarLocation: "topBottom",
+            templateElements: [
+              { type: "text", name: "q1" },
+            ],
+          },
+        ],
+      };
+      await initSurvey(page, framework, json2);
+      const addNewSelector = page.getByRole("button", { name: "Add new" });
+      const textSelector = page.locator("input[type='text']");
+      await addNewSelector.click();
+      await textSelector.fill("1");
+      await addNewSelector.click();
+      await textSelector.fill("2");
+      await addNewSelector.click();
+      await textSelector.fill("3");
+      await addNewSelector.click();
+      await textSelector.fill("4");
+      await addNewSelector.click();
+      await textSelector.fill("5");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult.panel).toEqual([{ q1: "1" }, { q1: "2" }, { q1: "3" }, { q1: "4" }, { q1: "5" }]);
+    });
+
+    test("enableAddPanel/enableRemovePanel disable add and remove buttons", async ({ page }) => {
+      const jsonEnable = {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            displayMode: "list",
+            panelCount: 2,
+            templateElements: [{ type: "text", name: "q1" }],
+          },
+        ],
+      };
+      await initSurvey(page, framework, jsonEnable);
+
+      const addBtn = page.locator(".sd-paneldynamic__add-btn");
+      const removeBtns = page.locator(".sd-paneldynamic__remove-btn");
+
+      await expect(addBtn).toBeEnabled();
+      await expect(removeBtns).toHaveCount(2);
+      await expect(removeBtns.nth(0)).toBeEnabled();
+      await expect(removeBtns.nth(1)).toBeEnabled();
+
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").enableAddPanel = false;
+      });
+      await expect(addBtn).toBeDisabled();
+      await expect(removeBtns.nth(0)).toBeEnabled();
+      await expect(removeBtns.nth(1)).toBeEnabled();
+
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").enableAddPanel = true;
+        (window as any).survey.getQuestionByName("panel").enableRemovePanel = false;
+      });
+      await expect(addBtn).toBeEnabled();
+      await expect(removeBtns.nth(0)).toBeDisabled();
+      await expect(removeBtns.nth(1)).toBeDisabled();
+
+      // Add a new panel while enableRemovePanel = false: the new panel's remove button should also be disabled
+      await addBtn.click();
+      await expect(removeBtns).toHaveCount(3);
+      await expect(removeBtns.nth(2)).toBeDisabled();
+
+      // Re-enable: all remove buttons (including newly added) should become enabled
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").enableRemovePanel = true;
+      });
+      await expect(removeBtns.nth(0)).toBeEnabled();
+      await expect(removeBtns.nth(1)).toBeEnabled();
+      await expect(removeBtns.nth(2)).toBeEnabled();
+    });
+
+    test("enableAddPanel disables the empty-state placeholder add button - #11336", async ({ page }) => {
+      const jsonEmpty = {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            displayMode: "list",
+            panelCount: 0,
+            templateElements: [{ type: "text", name: "q1" }],
+          },
+        ],
+      };
+      await initSurvey(page, framework, jsonEmpty);
+
+      const addBtn = page.locator(".sd-paneldynamic__add-btn");
+
+      await expect(addBtn).toHaveCount(1);
+      await expect(addBtn).toBeEnabled();
+
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").enableAddPanel = false;
+      });
+      await expect(addBtn).toBeDisabled();
+
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").enableAddPanel = true;
+      });
+      await expect(addBtn).toBeEnabled();
+    });
+
+    test("templateVisibleIf", async ({ page }) => {
+      await initSurvey(page, framework, json3);
+      const addNewSelector = page.getByRole("button", { name: "Add new" });
+      await expect(addNewSelector).toHaveCount(1);
+      await expect(page.locator("span").filter({ hasText: "#1-2" })).not.toBeVisible();
+      await expect(page.getByRole("textbox").first()).toBeFocused();
+      await page.keyboard.press("b");
+      await page.keyboard.press("Tab");
+      await expect(addNewSelector).toHaveCount(1);
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("a");
+      await page.keyboard.press("Tab");
+      await expect(addNewSelector).toHaveCount(1);
+      await expect(page.locator("span").filter({ hasText: "#1-2" })).toBeVisible();
+    });
+
+    test("templateVisibleIf displayMode: list", async ({ page }) => {
+      await initSurvey(page, framework, json3);
+      await page.evaluate(() => {
+        (window as any).survey.getQuestionByName("panel").displayMode = "list";
+      });
+      const titleSelector = page.locator("span").filter({ hasText: "q1" });
+      await expect(titleSelector).toHaveCount(0);
+      await page.keyboard.press("b");
+      await page.keyboard.press("Tab");
+      await expect(titleSelector).toHaveCount(0);
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("a");
+      await page.keyboard.press("Tab");
+      await expect(titleSelector).toHaveCount(1);
+    });
+
+    test("restful checkbox with showOtherItem & storeOthersAsComment set to false in panel dynamic", async ({ page }) => {
+      const jsonCheckboxRestFul = {
+        storeOthersAsComment: false,
+        elements: [
+          {
+            name: "panel",
+            type: "paneldynamic",
+            templateElements: [{
+              type: "checkbox",
+              name: "q1",
+              choicesByUrl: {
+                url: "http://127.0.0.1:8080/test-resources/countriesMock.json",
+                path: "RestResponse;result",
+                valueName: "name",
+              },
+              "showOtherItem": true
+            }]
+          }
+        ]
+      };
+      await initSurvey(page, framework, jsonCheckboxRestFul);
+      await page.evaluate((data) => {
+        window["survey"].data = data;
+        window["survey"].render();
+      }, { "panel": [{ "q1": ["newCountry"] }] });
+      await expect(page.locator("textarea").first()).toHaveValue("newCountry");
+    });
+
+    test("the pager moves the panel pages through its page dropdown", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            pageSize: 2,
+            defaultValue: [1, 2, 3, 4, 5].map(i => ({ name: "panel" + i })),
+            templateElements: [{ type: "text", name: "name" }],
+          },
+        ],
+      });
+      const pager = page.locator(".sd-pager");
+      const nameInput = page.locator(".sd-paneldynamic__panel-wrapper input").first();
+
+      await expect(nameInput).toHaveValue("panel1");
+      await expect(pager.locator("button[title='First']"), "no first and last below ten pages").toHaveCount(0);
+      await expect(pager.locator("button[title='Last']")).toHaveCount(0);
+      await expect(pager.locator(".sd-pager__total")).toHaveText("of 3");
+      await pager.getByRole("button", { name: "Page 1 of 3" }).click();
+      await page.getByRole("menuitemradio", { name: "3", exact: true }).click();
+      await expect(nameInput).toHaveValue("panel5");
+      await expect(pager.locator("button[title='Next']")).toBeDisabled();
+      await pager.locator("button[title='Previous']").click();
+      await expect(nameInput).toHaveValue("panel3");
+    });
+
+    test("the page list opens inside the window on its first open, near the window's bottom", async ({ page }) => {
+      await page.setViewportSize({ width: 1000, height: 600 });
+      await initSurvey(page, framework, {
+        elements: [
+          { type: "html", name: "spacer", html: "<div style='height: 900px'></div>" },
+          {
+            type: "paneldynamic",
+            name: "panel",
+            pageSize: 1,
+            defaultValue: [1, 2, 3, 4, 5].map(i => ({ name: "panel" + i })),
+            templateElements: [{ type: "text", name: "name" }],
+          },
+          { type: "html", name: "spacer2", html: "<div style='height: 900px'></div>" },
+        ],
+      });
+      const pageButton = page.locator(".sd-pager").getByRole("button", { name: "Page 1 of 5" });
+      // The dropdown 120px above the window's bottom: the five pages do not fit below it.
+      await pageButton.evaluate(el => { window.scrollBy(0, el.getBoundingClientRect().top - 480); });
+      await pageButton.click();
+      for (const pageNumber of ["1", "5"]) {
+        await expect(page.getByRole("menuitemradio", { name: pageNumber, exact: true }), "page " + pageNumber).toBeInViewport({ ratio: 1 });
+      }
+    });
+
+    test("the pager's page list on a phone: a pick waits for Apply, closing the sheet drops it", async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            pageSize: 2,
+            defaultValue: [1, 2, 3, 4, 5].map(i => ({ name: "panel" + i })),
+            templateElements: [{ type: "text", name: "name" }],
+          },
+        ],
+      });
+      const pager = page.locator(".sd-pager");
+      const sheet = page.locator(".sv-popup--sheet");
+      const nameInput = page.locator(".sd-paneldynamic__panel-wrapper input").first();
+
+      await pager.getByRole("button", { name: "Page 1 of 3" }).click();
+      await expect(sheet.locator(".sv-popup__body-header")).toHaveText("Select Page");
+      await sheet.getByRole("menuitemradio", { name: "3", exact: true }).click();
+      await expect(sheet).toBeVisible();
+      await expect(nameInput).toHaveValue("panel1");
+      await sheet.locator(".sv-popup__close-button").click();
+      await expect(sheet).toBeHidden();
+      await expect(nameInput).toHaveValue("panel1");
+
+      await pager.getByRole("button", { name: "Page 1 of 3" }).click();
+      await expect(sheet.getByRole("menuitemradio", { name: "1", exact: true }), "the dropped pick is gone").toHaveAttribute("aria-checked", "true");
+      await sheet.getByRole("menuitemradio", { name: "3", exact: true }).click();
+      await sheet.getByRole("button", { name: "Apply" }).click();
+      await expect(sheet).toBeHidden();
+      await expect(nameInput).toHaveValue("panel5");
+    });
+
+    test("Check valueName for two paneldynamics - #6584", async ({ page }) => {
+      await initSurvey(page, framework, {
+        logoPosition: "right",
+        pages: [
+          {
+            name: "page1",
+            elements: [
+              {
+                type: "paneldynamic",
+                name: "panel1",
+                valueName: "sharedData",
+                templateElements: [
+                  {
+                    type: "text",
+                    name: "name",
+                    defaultValueExpression: '({panelindex} + 1) +  " name"'
+                  },
+                ],
+              },
+              {
+                type: "paneldynamic",
+                name: "panel2",
+                valueName: "sharedData",
+                templateElements: [
+                  {
+                    type: "matrixdynamic",
+                    name: "matrix1",
+                    rowCount: 1,
+                    columns: [
+                      {
+                        name: "b_eil_nr",
+                        cellType: "text",
+                        readOnly: true,
+                        defaultValueExpression: "{panelindex} + 1",
+                        inputType: "number"
+                      },
+                      {
+                        name: "b_name",
+                        cellType: "text",
+                        readOnly: true,
+                        defaultValueExpression: "{panel.name}"
+                      }
+                    ],
+                    cellType: "text"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      });
+      await page.getByRole("button", { name: "Add new" }).first().click();
+      await getButtonByText(page, "Complete").click();
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({
+        sharedData: [
+          {
+            matrix1: [
+              {
+                b_eil_nr: 1,
+                b_name: "1 name"
+              }
+            ],
+            name: "1 name"
+          }
+        ]
+      });
+    });
+    test("Reactive addPanelText/removePanelText - #7658", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel1",
+            panelCount: 2,
+            displayMode: "tab",
+            newPanelPosition: "next",
+            templateElements: [
+              {
+                type: "text",
+                name: "name"
+              },
+            ],
+          }
+        ]
+      });
+      await page.evaluate(() => {
+        const q = (window as any).survey.getQuestionByName("panel1");
+        q.addPanelText = "#Add#";
+        q.removePanelText = "#Remove#";
+      });
+      await expect(page.locator("button").filter({ hasText: "#Add#" })).toBeVisible();
+      await expect(page.locator("button").filter({ hasText: "#Remove#" })).toBeVisible();
+    });
+    test("Focus first input on adding a new panel", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel1",
+            panelCount: 0,
+            newPanelPosition: "next",
+            templateElements: [
+              {
+                type: "text",
+                name: "name"
+              },
+            ],
+          }
+        ]
+      });
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      // Add focuses the new panel before it is rendered, so the input gets focus on a retry about 10 ms later.
+      // Keys typed before that go to the Add button and are lost.
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("123");
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("456");
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("789");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({
+        panel1: [{ name: "123" }, { name: "456" }, { name: "789" }]
+      });
+    });
+    test("Focus first input on adding a new panel, displayMode='tab'", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel1",
+            panelCount: 0,
+            displayMode: "tab",
+            newPanelPosition: "next",
+            templateElements: [
+              {
+                type: "text",
+                name: "name"
+              },
+            ],
+          }
+        ]
+      });
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("123");
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("456");
+      await page.locator("button").filter({ hasText: "Add" }).click();
+      await expect(page.getByRole("textbox", { name: "name" }).and(page.locator(":focus"))).toHaveValue("");
+      await page.keyboard.type("789");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({
+        panel1: [{ name: "123" }, { name: "456" }, { name: "789" }]
+      });
+    });
+    test("Check dynamic panel actionbar responsivity", async ({ page }) => {
+      await initSurvey(page, framework, {
+        "logoPosition": "right",
+        "pages": [
+          {
+            "name": "page1",
+            "elements": [
+              {
+                "type": "paneldynamic",
+                "name": "question1",
+
+                "templateElements": [
+                  {
+                    "type": "text",
+                    "name": "question2"
+                  }
+                ],
+                "displayMode": "tab"
+              }
+            ]
+          }
+        ]
+      });
+      for (let i = 0; i < 10; i++) {
+        await page.getByRole("button", { name: "Add new" }).click();
+      }
+      await expect(page.getByRole("button", { name: "More" })).toBeVisible();
+    });
+    test("Focus first input on adding a new panel by keyboard", async ({ page }) => {
+      await initSurvey(page, framework, {
+        autoFocusFirstQuestion: true,
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel1",
+            panelCount: 0,
+            templateElements: [
+              {
+                type: "text",
+                name: "name"
+              },
+            ],
+          }
+        ]
+      });
+      await expect(getButtonByText(page, "Add new")).toBeFocused();
+      await page.keyboard.press("Space");
+      await expect(page.getByRole("textbox", { name: "name" })).toBeFocused();
+      await page.keyboard.type("123");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({ panel1: [{ name: "123" }] });
+    });
+    test("Focus first input on removing and adding panels, #8940", async ({ page }) => {
+      await initSurvey(page, framework, {
+        autoFocusFirstQuestion: true,
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel1",
+            panelCount: 3,
+            templateElements: [
+              {
+                type: "text",
+                name: "name",
+                defaultValue: "abc"
+              },
+            ],
+          }
+        ]
+      });
+      await expect(page.getByRole("textbox", { name: "name" }).first()).toBeFocused();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Space");
+      await expect(page.getByRole("textbox", { name: "name" })).toHaveCount(2);
+      await expect(page.getByRole("button", { name: "Remove" }).and(page.locator(":focus"))).toHaveCount(1);
+      await page.keyboard.press("Space");
+      await expect(page.getByRole("textbox", { name: "name" })).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Remove" }).and(page.locator(":focus"))).toHaveCount(1);
+      await page.keyboard.press("Space");
+      await expect(getButtonByText(page, "Add new")).toBeFocused();
+      await page.keyboard.press("Space");
+      await expect(page.getByRole("textbox", { name: "name" }).first()).toBeFocused();
+      await page.keyboard.type("123");
+      await getButtonByText(page, "Complete").click();
+
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({ panel1: [{ name: "abc123" }] });
+    });
+
+    test("checkbox vs valuePropertyName and rendering panels, Bug#10633", async ({ page }) => {
+      await page.goto(`${url}${framework}`);
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      const json = {
+        elements: [
+          {
+            type: "checkbox",
+            name: "q1",
+            choices: ["apple", "banana", "orange"],
+            valueName: "data1",
+            valuePropertyName: "fruit"
+          },
+          {
+            type: "paneldynamic",
+            name: "panel",
+            valueName: "data1",
+            templateTitle: "{panel.fruit}",
+            templateElements: [
+              { type: "text", name: "panel_q1" },
+            ],
+            allowRemovePanel: false,
+            allowAddPanel: false
+          }
+        ]
+      };
+      await initSurvey(page, framework, json);
+      await page.evaluate(() => {
+        window["Survey"].settings.animationEnabled = true;
+        window["Survey"].settings.animation.respectReducedMotion = false;
+      });
+      await expect(page.locator("input[type=text]")).toHaveCount(0);
+      await page.locator(".sd-item__control-label").getByText("apple").click();
+      await expect(page.locator("input[type=text]")).toHaveCount(1);
+      await page.locator(".sd-item__control-label").getByText("orange").click();
+      await expect(page.locator("input[type=text]")).toHaveCount(2);
+      await page.keyboard.press("Tab");
+      await page.keyboard.type("I eat apple");
+      await page.keyboard.press("Tab");
+      await page.keyboard.type("I eat orange");
+
+      await getButtonByText(page, "Complete").click();
+      const surveyResult = await getSurveyResult(page);
+      expect(surveyResult).toEqual({
+        "data1": [
+          {
+            "fruit": "apple",
+            "panel_q1": "I eat apple"
+          },
+          {
+            "fruit": "orange",
+            "panel_q1": "I eat orange"
+          }
+        ]
+      });
+    });
+
+  });
+});
+
+frameworks.forEach((framework) => {
+  test.describe(`${framework} ${title} sort bar`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.goto(`${url}${framework}`);
+      await page.setViewportSize({ width: 1920, height: 1080 });
+    });
+    test("a field pick sorts the panels and the pager still pages them", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            title: "Products",
+            allowSort: true,
+            pageSize: 2,
+            defaultValue: [{ product: "b", price: 20 }, { product: "a", price: 30 }, { product: "c", price: 10 }],
+            templateElements: [
+              { type: "text", name: "product", title: "Product" },
+              { type: "text", name: "price", title: "Price", inputType: "number" },
+            ],
+          },
+        ],
+      });
+      const priceInput = page.locator(".sd-paneldynamic__panel-wrapper input[type=number]").first();
+      await expect(priceInput).toHaveValue("20");
+      await expect(page.locator(".sd-question__header .sd-question__sort-bar")).toBeVisible();
+      await page.getByRole("button", { name: /^Sort field/ }).click();
+      await page.locator(".sv-popup__container").filter({ visible: true }).getByRole("menuitemradio", { name: "Price", exact: true }).click();
+      await expect(priceInput).toHaveValue("30");
+      await expect(page.getByRole("button", { name: /^Sort order/ }).locator(".sd-action__title")).toHaveText("High - Low");
+      const pager = page.locator(".sd-pager");
+      await pager.locator("button[title='Next']").click();
+      await expect(priceInput).toHaveValue("10");
+      await pager.locator("button[title='Previous']").click();
+      await expect(priceInput).toHaveValue("30");
+    });
+    test("a sort of two levels sorts the panels and the pager still pages them", async ({ page }) => {
+      await initSurvey(page, framework, {
+        elements: [
+          {
+            type: "paneldynamic",
+            name: "panel",
+            title: "Products",
+            allowSort: true,
+            maxSortLevel: 2,
+            pageSize: 2,
+            defaultValue: [
+              { product: "c", category: "toys" },
+              { product: "a", category: "tools" },
+              { product: "b", category: "toys" },
+              { product: "d", category: "toys" },
+            ],
+            templateElements: [
+              { type: "text", name: "product", title: "Product" },
+              { type: "text", name: "category", title: "Category" },
+            ],
+          },
+        ],
+      });
+      const productInputs = page.locator(".sd-paneldynamic__panel-wrapper input[type=text]").filter({ visible: true });
+      const shownProducts = async (): Promise<Array<string>> =>
+        productInputs.evaluateAll((inputs: Array<HTMLInputElement>) => inputs.filter((_, index) => index % 2 === 0).map((input) => input.value));
+      await expect.poll(shownProducts).toEqual(["c", "a"]);
+      await page.getByRole("button", { name: /^Sort field (?!\d)/ }).click();
+      await page.locator(".sv-popup__container").filter({ visible: true }).getByRole("menuitemradio", { name: "Category", exact: true }).click();
+      await expect.poll(shownProducts).toEqual(["a", "c"]);
+      await page.getByRole("button", { name: "Add sort level", exact: true }).click();
+      // The panel's header leaves the bar too little room for the second level: it is behind "...".
+      await expect(page.getByRole("button", { name: "Show all sort levels", exact: true })).toBeVisible();
+      await expect.poll(shownProducts).toEqual(["a", "b"]);
+      const pager = page.locator(".sd-pager");
+      await pager.locator("button[title='Next']").click();
+      await expect.poll(shownProducts).toEqual(["c", "d"]);
+      await pager.locator("button[title='Previous']").click();
+      await expect.poll(shownProducts).toEqual(["a", "b"]);
+    });
+  });
+});

@@ -1,0 +1,3319 @@
+import { JsonObjectProperty, Serializer } from "./jsonobject";
+import { property, propertyArray } from "./decorators";
+import { SurveyError } from "./survey-error";
+import { ISurveyImpl, ISurvey, ISurveyData, IPlainDataOptions, IValueItemCustomPropValues, IElement, IPanel, ISurveyChoiceCallbacks } from "./base-interfaces";
+import { SurveyModel } from "./survey";
+import { IQuestionPlainData, Question, QuestionValueType, getScalarValueType, IVerifyDataContext, INestedWalkOptions, NestedElementVisit, NestedWalkBuild } from "./question";
+import { ItemValue } from "./itemvalue";
+import { getLocaleString } from "./surveyStrings";
+import { OtherEmptyError } from "./error";
+import { ChoicesRestful } from "./choicesRestful";
+import { ILocalizableOwner, LocalizableString } from "./localizablestring";
+import { ConditionRunner } from "./conditions/conditionRunner";
+import { Helpers, HashTable } from "./helpers";
+import { settings } from "./settings";
+import { isAnimationEnabled as areSurveyAnimationsEnabled } from "./utils/reduced-motion";
+import { SurveyElement } from "./survey-element";
+import { toCssClasses } from "./utils/cssClassBuilder";
+import { ITextArea, TextAreaModel } from "./utils/text-area";
+import { cleanHtmlElementAfterAnimation, prepareElementForVerticalAnimation, setPropertiesOnElementForAnimation } from "./utils/animation-dom";
+import { AnimationGroup, IAnimationGroupConsumer, AnimationBoolean } from "./utils/animation";
+import { TextContextProcessor } from "./textPreProcessor";
+import { ValidationContext } from "./question";
+import { PanelModel, PanelModelBase } from "./panel";
+import { Base, ComputedUpdater, IExpressionValidationOptions, IExpressionValidationResult } from "./base";
+import { ExpressionErrorType } from "./expressions/expressionError";
+import { EventBase } from "./event";
+import { QuestionSingleInputBehavior } from "./question_singleinput_behavior";
+import { ChoiceShortcuts, IChoiceShortcutsOwner } from "./utils/choice-shortcuts";
+import { Scope } from "./utils/scope";
+import { getIdSelector } from "./utils/dom-utils";
+
+const OTHER_ITEM_VALUE = "other";
+// The key a choice comment is kept under in the object of a selected item (commentPropertyValue).
+export const CHOICE_COMMENT_PROPERTY = "comment";
+// Whether a value is (or, for an array, holds) the value of the built-in "Other" item.
+export function isOtherItemValue(val: any): boolean {
+  if (Array.isArray(val)) {
+    return val.indexOf(OTHER_ITEM_VALUE) > -1;
+  }
+  return val === OTHER_ITEM_VALUE;
+}
+// The contract of a question whose value is picked from a list of items it offers: every Select
+// question, plus Boolean and Rating, which build their items themselves. Question.isSelectQuestion()
+// says whether a question implements it, so a consumer that only exchanges data with the survey -
+// a JSON Schema, a text or voice interface, an AI agent - never has to know the question types.
+export interface ISelectQuestion {
+  // The items to offer, in the order the question offers them, without the ones that are a gesture
+  // rather than a value (Select All).
+  getValueChoices(): Array<ItemValue>;
+  // The items cannot be listed: they are loaded on demand, or the request that fills them has not
+  // answered yet.
+  readonly hasUnknownChoices: boolean;
+  // The built-in "Other" item, whose selection is completed by a comment.
+  isOtherItem(item: ItemValue): boolean;
+  // Selecting the item clears every other selection: the built-in None / Refuse to answer / Don't
+  // know items and any choice the author marked as exclusive.
+  isNoneItem(item: ItemValue): boolean;
+}
+
+export interface IChoiceOwner extends ILocalizableOwner {
+  supportElementsInChoice(): boolean;
+  getSurvey(): ISurvey;
+  getCssClassesForCommentPanelAnimation(type: "comment" | "panel"): { onLeave: string, onEnter: string };
+  getWrapperElement(): HTMLElement;
+  isItemSelected(item: ItemValue): boolean;
+  isDesignMode: boolean;
+  parent: IPanel;
+  showChoicePanelsInline?: boolean;
+}
+
+export class ChoiceItem extends ItemValue {
+  private panelValue: PanelModel;
+  protected getBaseType(): string { return "choiceitem"; }
+  protected getAllChildren(): Base[] {
+    return [
+      ...super.getAllChildren(),
+      ...(this.hasElements ? this.detailElements : []),
+    ];
+  }
+  public get choiceOwner(): IChoiceOwner { return this.locOwner as IChoiceOwner; }
+  public get supportElements(): boolean { return this.choiceOwner?.supportElementsInChoice() === true; }
+
+  @property({ onSetting: (val: boolean, obj: ChoiceItem) => obj.supportComment ? val : false }) showCommentArea: boolean;
+  @property() isCommentRequired: boolean;
+  @property({ localizable: true }) commentPlaceholder: string;
+
+  public get isCommentShowing(): boolean {
+    return this.getPropertyValue("isCommentShowing", false);
+  }
+  @property() private renderedIsCommentShowingValue: boolean;
+  private commentAnimaionValue: AnimationBoolean;
+  private get commentAnimation(): AnimationBoolean {
+    if (!this.commentAnimaionValue) {
+      const cssClasses = this.choiceOwner.getCssClassesForCommentPanelAnimation("comment");
+      this.commentAnimaionValue = new AnimationBoolean({
+        getAnimatedElement: ()=> {
+          const id = (this.choiceOwner as QuestionSelectBase).getItemCommentId(this);
+          return this.choiceOwner.getWrapperElement()?.querySelector(`#${id}`)?.parentElement?.parentElement as HTMLElement;
+        },
+        getEnterOptions() {
+          return { cssClass: cssClasses.onEnter,
+            onBeforeRunAnimation: prepareElementForVerticalAnimation,
+            onAfterRunAnimation: cleanHtmlElementAfterAnimation };
+        },
+        getLeaveOptions() {
+          return { cssClass: cssClasses.onLeave,
+            onBeforeRunAnimation: prepareElementForVerticalAnimation,
+            onAfterRunAnimation: cleanHtmlElementAfterAnimation };
+        },
+        isAnimationEnabled: () => {
+          return areSurveyAnimationsEnabled();
+        },
+        getRerenderEvent: ()=> {
+          return this.onElementRerendered;
+        },
+      }, (val) => this.renderedIsCommentShowingValue = val, () => this.renderedIsCommentShowingValue);
+    }
+    return this.commentAnimaionValue;
+  }
+  public get renderedIsCommentShowing() {
+    return this.renderedIsCommentShowingValue;
+  }
+  public set renderedIsCommentShowing(val: boolean) {
+    this.commentAnimation.sync(val);
+  }
+  setIsCommentShowing(val: boolean) {
+    this.setPropertyValue("isCommentShowing", val);
+    this.renderedIsCommentShowing = val;
+  }
+  public get supportComment(): boolean {
+    const owner: any = this.locOwner;
+    if (!owner || !owner.supportMultipleComment) return false;
+    return owner.supportMultipleComment(this);
+  }
+  protected isPropertyStoredInHash(name: string): boolean {
+    if (name === "elements") return !this.hasElements;
+    return super.isPropertyStoredInHash(name);
+  }
+  protected mergeLocalizationWithInnerObjects(src: Base, locales?: Array<string>): void {
+    const srcPanel = (<ChoiceItem><unknown>src).panelValue;
+    if (srcPanel) {
+      (<any>this.panel).mergeLocalizationObj(srcPanel, locales);
+    }
+  }
+  protected canAddPpropertyToJSON(prop: JsonObjectProperty): boolean {
+    if (prop.name === "commentPlaceholder") return !!this.getLocalizableString("commentPlaceholder");
+    return super.canAddPpropertyToJSON(prop);
+  }
+  protected onLocOwnerChanged() : void {
+    if (this.showCommentArea && !this.supportComment) {
+      this.showCommentArea = false;
+    }
+    this.setPanelSurvey(this.panelValue);
+    this.panelValue?.elements.forEach(el => this.linkElementToOwner(el, true));
+  }
+  private onExpandPanelAtDesignValue: EventBase<ChoiceItem, any>;
+  public get onExpandPanelAtDesign(): EventBase<ChoiceItem, any> {
+    if (!this.onExpandPanelAtDesignValue) {
+      this.onExpandPanelAtDesignValue = new EventBase<ChoiceItem, any>();
+    }
+    return this.onExpandPanelAtDesignValue;
+  }
+  @property() private renderedIsPanelShowingValue: boolean;
+  private panelAnimationValue: AnimationBoolean;
+  private get panelAnimation() {
+    if (!this.panelAnimationValue) {
+      const cssClasses = this.choiceOwner.getCssClassesForCommentPanelAnimation("panel");
+      this.panelAnimationValue = new AnimationBoolean({
+        getAnimatedElement: ()=> {
+          return this.choiceOwner.getWrapperElement()?.querySelector(getIdSelector(this.panel.renderedId)) as HTMLElement;
+        },
+        getEnterOptions() {
+          return { cssClass: cssClasses.onEnter,
+            onBeforeRunAnimation: prepareElementForVerticalAnimation,
+            onAfterRunAnimation: cleanHtmlElementAfterAnimation };
+        },
+        getLeaveOptions() {
+          return { cssClass: cssClasses.onLeave,
+            onBeforeRunAnimation: prepareElementForVerticalAnimation,
+            onAfterRunAnimation: cleanHtmlElementAfterAnimation };
+        },
+        isAnimationEnabled: () => {
+          return areSurveyAnimationsEnabled();
+        },
+        getRerenderEvent: ()=> {
+          return this.onElementRerendered;
+        },
+      }, (val) => this.renderedIsPanelShowingValue = val, () => this.renderedIsPanelShowingValue);
+    }
+    return this.panelAnimationValue;
+  }
+  public get renderedIsPanelShowing() {
+    const res = this.renderedIsPanelShowingValue;
+    // In inputPerPage mode nested elements are separate steps, so the panel is not rendered inline.
+    return res && this.choiceOwner?.showChoicePanelsInline === false ? false : res;
+  }
+  public set renderedIsPanelShowing(value: boolean) {
+    const panel = this.panel;
+    panel.forceRenderRows(panel.visibleRows);
+    this.panelAnimation.sync(value);
+  }
+  public setIsPanelShowing(val: boolean) {
+    this.setPropertyValue("isPanelShowing", val);
+    this.renderedIsPanelShowing = val;
+  }
+  public get isPanelShowing(): boolean {
+    return this.getPropertyValue("isPanelShowing", false);
+  }
+  public get hasElements(): boolean {
+    const pnl = this.panelValue;
+    return !!pnl && pnl.elements.length > 0;
+  }
+  public get panel(): PanelModel {
+    if (!this.panelValue) {
+      this.panelValue = this.createPanel();
+    } else if (!this.panelValue.survey) {
+      // The panel may have been created while the owner question was detached (e.g. during
+      // fromJSON on question type conversion). Re-link it once the owner has a survey.
+      this.setPanelSurvey(this.panelValue);
+    }
+    return this.panelValue;
+  }
+  public get isPanelCreated(): boolean {
+    return !!this.panelValue;
+  }
+  // The created panel, or undefined. Unlike the panel getter, it neither creates the panel nor links it
+  // to the survey, so a walk can read it while the owner has a survey but no parent yet.
+  public get createdPanel(): PanelModel {
+    return this.panelValue;
+  }
+  public get elements(): Array<IElement> {
+    return this.panel.elements;
+  }
+  public panelFirstRendering(): void {
+    if (this.hasElements && this.isPanelShowing) {
+      this.panel.onFirstRendering();
+    }
+  }
+  protected createPanel(): PanelModel {
+    const res = Serializer.createClass("panel");
+    res.renderWidth = "100%";
+    res.isInteractiveDesignElement = false;
+    res.showTitle = false;
+    res.isInternalNested = true;
+    res["choiceItem"] = this;
+    this.setLinkCallbacks(res, true);
+    this.setPanelSurvey(res);
+    return res;
+  }
+  // Questions inside a choice panel get the owner question as parentQuestion (as Dynamic Panel and
+  // matrix inner questions do); single-input navigation, focus and frame CSS rely on this link.
+  private linkElementToOwner(el: IElement, isAdded: boolean): void {
+    if (el.isPanel) {
+      const pnl = <PanelModel><any>el;
+      this.setLinkCallbacks(pnl, isAdded);
+      pnl.elements.forEach(child => this.linkElementToOwner(child, isAdded));
+      return;
+    }
+    const q = <Question><any>el;
+    const owner = this.ownerQuestion;
+    if (isAdded) {
+      if (!!owner) q.setParentQuestion(owner);
+    } else if (!!owner && q.parentQuestion === owner) {
+      q.setParentQuestion(null);
+    }
+  }
+  private setLinkCallbacks(pnl: PanelModel, isAdded: boolean): void {
+    pnl.addElementCallback = isAdded ? (el: IElement) => this.linkElementToOwner(el, true) : undefined;
+    pnl.removeElementCallback = isAdded ? (el: IElement) => this.linkElementToOwner(el, false) : undefined;
+  }
+  private get ownerQuestion(): Question {
+    const owner: any = this.choiceOwner;
+    return !!owner && owner.isQuestion ? owner : null;
+  }
+  private setPanelSurvey(pnl: PanelModel) {
+    if (!!pnl && !pnl.survey) {
+      pnl.selectedElementInDesign = <any>this.choiceOwner;
+      const survey: any = this.choiceOwner?.getSurvey();
+      if (!!survey) {
+        pnl.name = "choicePanel_" + pnl.id;
+        pnl.parent = <PanelModelBase>this.choiceOwner.parent;
+        pnl.setSurveyImpl(survey);
+      }
+    }
+  }
+  public dispose(): void {
+    super.dispose();
+    this.panelValue?.dispose();
+    this.panelValue = undefined;
+  }
+}
+
+// The choice panels of a select question: every created one, or the showing ones.
+const allChoicePanels: INestedWalkOptions = { build: "none", visibleOnly: false };
+const showingChoicePanels: INestedWalkOptions = { build: "none", visibleOnly: true };
+
+/**
+ * A base class for multiple-choice question types ([Checkboxes](https://surveyjs.io/form-library/documentation/questioncheckboxmodel), [Dropdown](https://surveyjs.io/form-library/documentation/questiondropdownmodel), [Radio Button Group](https://surveyjs.io/form-library/documentation/questionradiogroupmodel), etc.).
+ */
+export class QuestionSelectBase extends Question implements IChoiceOwner, ISelectQuestion {
+  public visibleChoicesChangedCallback: () => void;
+  public loadedChoicesFromServerCallback: () => void;
+  public renderedChoicesChangedCallback: () => void;
+  public get choiceCallbacks(): ISurveyChoiceCallbacks {
+    return this.survey as ISurveyChoiceCallbacks;
+  }
+  private commentAreaModelValues: HashTable<TextAreaModel>;
+  private filteredChoicesValue: Array<ItemValue>;
+  private otherItemValue: ItemValue;
+  private choicesFromUrl: Array<ItemValue>;
+  private cachedValueForUrlRequests: any;
+  private isChoicesLoaded: boolean;
+  private enableOnLoadingChoices: boolean;
+  private noneItemValue: ItemValue;
+  private refuseItemValue: ItemValue;
+  private dontKnowItemValue: ItemValue;
+  private newItemValue: ItemValue;
+  private canShowOptionItemCallback: (item: ItemValue) => boolean;
+  private waitingGetChoiceDisplayValueResponse: boolean;
+  private get waitingChoicesByURL(): boolean {
+    return !this.isChoicesLoaded && this.hasChoicesUrl;
+  }
+  @property() protected selectedItemValues: any;
+
+  constructor(name: string) {
+    super(name);
+    this.createItemValues("choices");
+    this.createNewArray("visibleChoices", () => this.updateRenderedChoices(), () => this.updateRenderedChoices());
+  }
+  protected onPropertyValueChanged(name: string, oldValue: any, newValue: any): void {
+    super.onPropertyValueChanged(name, oldValue, newValue);
+    const visibleChoicesChangedProps = ["choices", "customChoices", "choicesFromQuestion", "choicesFromQuestionMode", "choiceValuesFromQuestion",
+      "choiceTextsFromQuestion", "showOtherItem", "showNoneItem", "showRefuseItem", "showDontKnowItem", "isUsingRestful", "isMessagePanelVisible",
+      "choicesOrder"];
+    if (visibleChoicesChangedProps.indexOf(name) > -1 && (name !== "choices" || !this.filterItems())) {
+      this.onVisibleChoicesChanged();
+    }
+    if (visibleChoicesChangedProps.indexOf(name) > -1) {
+      this.updateValuePropertiesOnChoicesChanged();
+    }
+    if (name === "hideIfChoicesEmpty") {
+      this.onVisibleChanged();
+    }
+    if (name === "selectedItemValues") {
+      this.onSelectedItemValuesChangedHandler(newValue);
+    }
+    if (name === "choicesVisibleIf" || name === "choicesEnableIf") {
+      this.filterItems();
+    }
+  }
+  public getType(): string {
+    return "selectbase";
+  }
+  public validateExpression(name: string, expression: string, options: IExpressionValidationOptions): IExpressionValidationResult | undefined {
+    const res = super.validateExpression(name, expression, options);
+    // {item} is a runtime variable provided per choice for these properties, so it is not an unknown variable.
+    if (!!res && (name === "choicesVisibleIf" || name === "choicesEnableIf")) {
+      res.errors = res.errors.filter(err => err.errorType !== ExpressionErrorType.UnknownVariable ||
+        (err.variableName || "").toLowerCase() !== "item");
+      if (res.errors.length === 0) return undefined;
+    }
+    return res;
+  }
+  protected getAllChildren(): Base[] {
+    return [
+      ...super.getAllChildren(),
+      ...this.choices
+    ];
+  }
+  public dispose(): void {
+    super.dispose();
+    // activeChoices registers with a select source and with an array source alike (a dynamic panel or
+    // a matrix whose records are the choices); a question left registered with an array source is
+    // updated on every write of it for as long as the source lives.
+    const q = this.findCarryForwardQuestion();
+    if (!!this.getQuestionWithChoicesCore(q) || !!this.getQuestionWithArrayValue(q)) {
+      (<any>q).removeDependedQuestion(this);
+    }
+    const dist = this.commentAreaModelValues;
+    if (!!dist) {
+      Object.keys(dist).forEach((key) => { dist[key].dispose(); });
+    }
+    this.forEachNestedElement(info => (<PanelModel>info.element).dispose(), allChoicePanels);
+  }
+  public supportElementsInChoice(): boolean {
+    return false;
+  }
+  protected createSingleInputBehavior(): QuestionSingleInputBehavior {
+    if (this.supportElementsInChoice()) return new SelectBaseSingleInputBehavior(this);
+    return super.createSingleInputBehavior();
+  }
+  // false while the question is the active single input in inputPerPage mode: nested choice
+  // elements are then separate steps instead of a panel expanded under the choice list.
+  public get showChoicePanelsInline(): boolean {
+    if (!this.supportElementsInChoice() || !this.isSingleInputActive) return true;
+    return !this.singleInput?.supportsNestedSingleInput(this);
+  }
+  public getPanels(): Array<IPanel> {
+    if (!this.supportElementsInChoice()) return super.getPanels();
+    const res = new Array<IPanel>();
+    this.forEachNestedElement(info => { res.push(<PanelModel>info.element); }, allChoicePanels);
+    return res;
+  }
+  /* Every choice panel that is created, empty ones included, as getPanels() and disposal see them. A
+     panel is created by JSON elements or by reading item.panel, and it stays created after its last
+     element is removed. The walk reads item.createdPanel, never item.panel: reading item.panel creates
+     the panel and links it to the survey, and a walk run from setSurveyImpl (setIsMobile) happens before
+     the question has its parent, so the panel would keep no parent. */
+  protected forEachNestedElementCore(visit: NestedElementVisit, build: NestedWalkBuild): boolean | void {
+    if (!this.supportElementsInChoice()) return;
+    return this.choices.some((item) => {
+      const panel = item.createdPanel;
+      return !!panel && visit({ element: panel, role: "choicePanel", segment: undefined, location: "root", visible: item.isPanelShowing });
+    });
+  }
+  // A select question always lists itself, and the questions of its choice panels only with includeNested.
+  protected canListNestedElements(includeNested: boolean): boolean {
+    return includeNested;
+  }
+  public getElementsInDesign(includeHidden: boolean = false): Array<IElement> {
+    if (!this.supportElementsInChoice()) return [];
+    const res = new Array<IElement>();
+    this.choices.forEach((item) => {
+      if (item.hasElements) {
+        if (includeHidden) {
+          res.push(item.panel);
+        } else {
+          res.push(...item.elements);
+        }
+      }
+    });
+    return res;
+  }
+  public get otherTextAreaModel(): TextAreaModel {
+    return this.getCommentTextAreaModel(this.otherItem);
+  }
+  public getCommentTextAreaModel(item: ItemValue): TextAreaModel {
+    const val = item?.value;
+    if (val === undefined) return null;
+    if (!this.commentAreaModelValues) {
+      this.commentAreaModelValues = {};
+    }
+    const dic = this.commentAreaModelValues;
+    if (!dic[val]) {
+      dic[val] = new TextAreaModel(this.getOtherTextAreaOptions(<ChoiceItem>item));
+    }
+    return dic[val];
+  }
+  private getOtherTextAreaOptions(item: ChoiceItem): ITextArea {
+    const options: ITextArea = {
+      question: this,
+      id: () => this.getItemCommentId(item),
+      propertyNames: [this.getCommentPropertyValue(item)],
+      cssClasses: () => {
+        return {
+          root: toCssClasses(this.cssClasses.comment, this.isItemCommentOnError(item) && this.cssClasses.commentOnError),
+          control: this.cssClasses.commentControl,
+          grip: this.cssClasses.commentGrip,
+          gripIconId: this.cssClasses.commentGripIconId
+        };
+      },
+      placeholder: () => this.getCommentPlaceholder(item),
+      isDisabledAttr: () => this.isInputReadOnly || false,
+      rows: () => this.commentAreaRows,
+      maxLength: () => this.getOthersMaxLength(),
+      autoGrow: () => this.survey && this.survey.autoGrowComment,
+      ariaRequired: () => this.ariaRequired || this.a11y_input_ariaRequired,
+      ariaLabel: () => this.ariaLabel || this.a11y_input_ariaLabel,
+      ariaInvalid: () => this.isItemCommentOnError(item) ? "true" : null,
+      ariaDescribedBy: () => this.isItemCommentOnError(item) ? this.renderedId + "_errors" : null,
+      getTextValue: () => { return this.getCommentValueCore(item); },
+      onTextAreaChange: (e) => { this.onOtherValueChange(item, e); },
+      onTextAreaInput: (e) => { this.onOtherValueInput(item, e); },
+    };
+    return options;
+  }
+  private getCommentPlaceholder(item: ChoiceItem): string {
+    if (item.commentPlaceholder) return item.commentPlaceholder;
+    if (this.isOtherItemByValue(item)) return this.otherPlaceholder;
+    const commentPlaceholder = this.commentPlaceholder;
+    return new TextContextProcessor(item).processText(commentPlaceholder, true);
+  }
+  protected resetDependedQuestion(): void {
+    this.choicesFromQuestion = "";
+  }
+  public get otherId(): string {
+    return this.getItemCommentId(this.otherItem);
+  }
+  public getItemCommentId(item: ItemValue): string {
+    // The item's renderedId is a per-survey-deterministic, uniqueId-free, SSR-namespaced token
+    // (unique per item regardless of its position in visibleChoices), so it is a stable base for the
+    // comment textarea DOM id.
+    return item.renderedId + "_comment";
+  }
+  protected getCommentElementsId(): Array<string> {
+    return [this.commentId, this.otherId];
+  }
+  protected getItemValueType(): string {
+    return "choiceitem";
+  }
+  public createItemValue(value: any, text?: string): ChoiceItem {
+    const res = this.createChoiceItem(value);
+    res.locOwner = this;
+    if (!!text) res.text = text;
+    return res;
+  }
+  private createChoiceItem(value: any): ChoiceItem {
+    const json = Helpers.isValueObject(value) || Helpers.isValueEmpty(value) ? { value: value } : value;
+    return <ChoiceItem>Serializer.createClass(this.getItemValueType(), json);
+  }
+  protected validateElementCore(context: ValidationContext): boolean {
+    // Read when the validation starts: an async validator that settles later never clears.
+    if (context.isOnValueChanged !== true && context.clearIncorrectValues && this.getClearIfInvisible() !== "none") {
+      this.clearIncorrectOwnValue();
+    }
+    let res = true;
+    if (!this.isChoicePanelsValidationSuppressed) {
+      this.forEachNestedElement(info => {
+        res &&= (<PanelModel>info.element).validateElement(context);
+      }, showingChoicePanels);
+    }
+    return super.validateElementCore(context) && res;
+  }
+  // A select without choice panels walks nothing, see forEachNestedElementCore.
+  public getAllErrors(): Array<SurveyError> {
+    return super.getAllErrors().concat(this.getNestedErrors());
+  }
+  public clearErrors(): void {
+    super.clearErrors();
+    this.forEachNestedElement(info => info.element.clearErrors(), { build: "none", visibleOnly: false });
+  }
+  private choicePanelsValidationSuppressingScope = new Scope();
+  private get isChoicePanelsValidationSuppressed(): boolean {
+    return this.choicePanelsValidationSuppressingScope.isActive;
+  }
+  // Used by Next on the question's own step in inputPerPage mode: the nested choice elements are
+  // not on screen yet and get validated on their own steps. Every other validation path checks them.
+  public validateWithoutChoicePanels(): boolean {
+    return this.choicePanelsValidationSuppressingScope.run(() => this.validate(true, true));
+  }
+  public get isUsingCarryForward(): boolean {
+    return !!this.carryForwardQuestionType;
+  }
+  public get carryForwardQuestionType(): string {
+    return this.getPropertyValue("carryForwardQuestionType");
+  }
+  private setCarryForwardQuestionType(selBaseQuestion: boolean, arrayQuestion: boolean): void {
+    const mode = selBaseQuestion ? "select" : (arrayQuestion ? "array" : undefined);
+    this.setPropertyValue("carryForwardQuestionType", mode);
+  }
+  public get isUsingRestful(): boolean {
+    return this.getPropertyValueWithoutDefault("isUsingRestful") || false;
+  }
+  public updateIsUsingRestful(): void {
+    this.setPropertyValueDirectly("isUsingRestful", this.hasChoicesUrl);
+  }
+  public supportGoNextPageError(): boolean {
+    return !this.isOtherSelected || !!this.otherValue;
+  }
+  isLayoutTypeSupported(layoutType: string): boolean {
+    return true;
+  }
+  public localeChanged(): void {
+    super.localeChanged();
+    if (this.choicesOrder !== "none") {
+      this.updateVisibleChoices();
+      this.onVisibleChoicesChanged();
+    }
+  }
+  public locStrsChanged(): void {
+    super.locStrsChanged();
+    if (!!this.choicesFromUrl) {
+      ItemValue.locStrsChanged(this.choicesFromUrl);
+      ItemValue.locStrsChanged(this.visibleChoices);
+    }
+    if (this.isUsingCarryForward) {
+      ItemValue.locStrsChanged(this.visibleChoices);
+    }
+  }
+  private prevOtherErrorValue: string;
+  private updatePrevOtherErrorValue(val: string): void {
+    const oldVal = this.otherValue;
+    if (val !== oldVal) {
+      this.prevOtherErrorValue = oldVal;
+    }
+  }
+  protected setNewComment(newValue: string): void {
+    if (this.isOtherSelected && this.getStoreOthersAsComment()) {
+      this.updatePrevOtherErrorValue(newValue);
+    }
+    super.setNewComment(newValue);
+  }
+  private commentSettingScope = new Scope();
+  public get otherValue(): string {
+    if (this.getStoreOthersAsComment()) return this.getQuestionComment();
+    return this.otherValueCore;
+  }
+  public set otherValue(val: string) {
+    val = this.getTrimmedComment(val);
+    if (!this.commentSettingScope.isActive && this.otherValue !== val) {
+      this.onUpdateCommentOnAutoOtherMode(val);
+      this.updatePrevOtherErrorValue(val);
+      this.commentSettingScope.run(() => {
+        if (this.getStoreOthersAsComment())
+          this.setNewComment(val);
+        else {
+          this.otherValueCore = val;
+          if (this.isOtherSelected && !this.isRenderedValueSetting) {
+            this.value = this.getValueOnSettingOther(val);
+          }
+        }
+      });
+      this.updateChoicesDependedQuestions();
+    }
+  }
+  protected get otherValueCore(): string {
+    return this.getPropertyValue("otherValue");
+  }
+  protected set otherValueCore(val: string) {
+    this.setPropertyValue("otherValue", val);
+  }
+  /**
+   * Returns the "Other" choice item. Use this property to change the item's `value` or `text`.
+   * @see showOtherItem
+   */
+  public get otherItem(): ItemValue {
+    if (!this.otherItemValue) {
+      this.otherItemValue = this.createBuiltInItem(OTHER_ITEM_VALUE, "otherText", "otherItemText", (item: ChoiceItem) => {
+        item.setPropertyValue("showCommentArea", true);
+        item.isCommentRequired = true;
+      });
+    }
+    return this.otherItemValue;
+  }
+  /**
+   * Returns `true` if the "Other" choice item is selected.
+   * @see showOtherItem
+   */
+  public get isOtherSelected(): boolean {
+    return this.showOtherItem && this.isOtherValue(this.renderedValue);
+  }
+  public get isNoneSelected(): boolean {
+    return this.showNoneItem && this.getIsItemValue(this.renderedValue, this.noneItem);
+  }
+  public supportMultipleComment(item: ItemValue): boolean { return true; }
+  public isCommentShowing(item: ItemValue): boolean {
+    return item && item.showCommentArea && this.isItemSelected(item);
+  }
+  public getCommentValue(item: ItemValue): string {
+    return this.isCommentShowing(item) ? this.getCommentValueCore(item) || "" : "";
+  }
+  public setCommentValue(item: ItemValue, newValue: string): void {
+    if (this.isCommentShowing(item)) {
+      this.setCommentValueCore(item, newValue);
+    }
+  }
+  public get commentPropertyValue(): string {
+    return CHOICE_COMMENT_PROPERTY;
+  }
+  protected getCommentValueCore(item: ItemValue): string {
+    if (this.isOtherItemByValue(item)) return this.otherValue;
+    return this.getPropertyValue(this.getCommentPropertyValue(item), this.getCommentValueByItem(item)) || "";
+  }
+  protected getCommentValueByItem(item: ItemValue): string {
+    const val = this.value;
+    if (typeof val === "object") return val[this.commentPropertyValue] || "";
+    return "";
+  }
+  protected setCommentValueCore(item: ItemValue, newValue: string): void {
+    if (this.isOtherItemByValue(item)) {
+      this.otherValue = newValue;
+    } else {
+      this.setCommentPropertyValue(item, newValue);
+      if (this.isItemSelectedCore(item)) {
+        if (!!newValue) {
+          this.value = { value: item.value, comment: newValue };
+        } else {
+          this.value = item.value;
+        }
+      }
+    }
+  }
+  protected setCommentPropertyValue(item: ItemValue, newValue: string): void {
+    this.setPropertyValue(this.getCommentPropertyValue(item), newValue);
+  }
+  protected isOtherItemByValue(item: ItemValue): boolean {
+    return this.isOtherValue(item.value);
+  }
+  protected getCommentPropertyValue(item: ItemValue): string {
+    if (this.isOtherItemByValue(item)) return this.getStoreOthersAsComment() ? "comment" : "otherValue";
+    return "other_" + item.uniqueId;
+  }
+  /**
+   * Specifies whether to display the "None" choice item.
+   *
+   * When users select the "None" item in multi-select questions, all other items become unselected.
+   *
+   * [Dropdown Demo](https://surveyjs.io/form-library/examples/create-dropdown-menu-in-javascript/ (linkStyle))
+   *
+   * [Checkboxes Demo](https://surveyjs.io/form-library/examples/create-checkboxes-question-in-javascript/ (linkStyle))
+   *
+   * [Radio Button Group Demo](https://surveyjs.io/form-library/examples/single-select-radio-button-group/ (linkStyle))
+   * @see noneItem
+   * @see noneText
+   * @see [settings.noneItemValue](https://surveyjs.io/form-library/documentation/api-reference/settings#noneItemValue)
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property() showNoneItem: boolean;
+  public get hasNone(): boolean {
+    return this.showNoneItem;
+  }
+  public set hasNone(val: boolean) {
+    this.showNoneItem = val;
+  }
+  /**
+   * Returns the "None" choice item. Use this property to change the item's `value` or `text`.
+   * @see showNoneItem
+   */
+  public get noneItem(): ItemValue {
+    if (!this.noneItemValue) {
+      this.noneItemValue = this.createBuiltInNoneItem(settings.noneItemValue, "noneText", "noneItemText");
+    }
+    return this.noneItemValue;
+  }
+  /**
+   * Gets or sets a caption for the "None" choice item.
+   * @see showNoneItem
+   */
+  public get noneText(): string {
+    return this.getLocStringText(this.locNoneText);
+  }
+  public set noneText(val: string) {
+    this.setLocStringText(this.locNoneText, val);
+  }
+  get locNoneText(): LocalizableString {
+    return this.noneItem.locText;
+  }
+  /**
+   * Specifies whether to display the "Refuse to answer" choice item.
+   *
+   * When users select the "Refuse to answer" item in multi-select questions, all other items become unselected.
+   * @see refuseItem
+   * @see refuseItemText
+   * @see [settings.refuseItemValue](https://surveyjs.io/form-library/documentation/api-reference/settings#refuseItemValue)
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property() showRefuseItem: boolean;
+  /**
+   * Returns the "Refuse to answer" choice item. Use this property to change the item's `value` or `text`.
+   * @see showRefuseItem
+   */
+  public get refuseItem(): ItemValue {
+    if (!this.refuseItemValue) {
+      this.refuseItemValue = this.createBuiltInNoneItem(settings.refuseItemValue, "refuseText", "refuseItemText");
+    }
+    return this.refuseItemValue;
+  }
+  /**
+   * Gets or sets a caption for the "Refuse to answer" choice item.
+   * @see showRefuseItem
+   */
+  public get refuseText(): string {
+    return this.getLocStringText(this.locRefuseText);
+  }
+  public set refuseText(val: string) {
+    this.setLocStringText(this.locRefuseText, val);
+  }
+  get locRefuseText(): LocalizableString {
+    return this.refuseItem.locText;
+  }
+  /**
+   * Specifies whether to display the "Don't know" choice item.
+   *
+   * When users select the "Don't know" item in multi-select questions, all other items become unselected.
+   * @see dontKnowItem
+   * @see dontKnowItemText
+   * @see [settings.dontKnowItemValue](https://surveyjs.io/form-library/documentation/api-reference/settings#dontKnowItemValue)
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property() showDontKnowItem: boolean;
+  /**
+   * Returns the "Don't know" choice item. Use this property to change the item's `value` or `text`.
+   * @see showDontKnowItem
+   */
+  public get dontKnowItem(): ItemValue {
+    if (!this.dontKnowItemValue) {
+      this.dontKnowItemValue = this.createBuiltInNoneItem(settings.dontKnowItemValue, "dontKnowText", "dontKnowItemText");
+    }
+    return this.dontKnowItemValue;
+  }
+  /**
+   * Gets or sets a caption for the "Don't know" choice item.
+   * @see showDontKnowItem
+   */
+  public get dontKnowText(): string {
+    return this.getLocStringText(this.locDontKnowText);
+  }
+  public set dontKnowText(val: string) {
+    this.setLocStringText(this.locDontKnowText, val);
+  }
+  get locDontKnowText(): LocalizableString {
+    return this.dontKnowItem.locText;
+  }
+  private createBuiltInNoneItem(defaultValue: any, name: string, locName: string): ChoiceItem {
+    return this.createBuiltInItem(defaultValue, name, locName, (item: ChoiceItem) => item.isExclusive = true);
+  }
+  protected createBuiltInItem(defaultValue: any, name: string, locName: string, callback?: (item: ChoiceItem) => void): ChoiceItem {
+    const item = this.createChoiceItem(defaultValue);
+    const locStr = this.createLocalizableString(name, item, true, locName);
+    item.setLocText(locStr);
+    if (callback) {
+      callback(item);
+    }
+    item.locOwner = this;
+    return item;
+  }
+  /**
+   * A Boolean expression that is evaluated against each choice item. If the expression evaluates to `false`, the choice item becomes hidden.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Use the `{item}` placeholder to reference the current choice item in the expression.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   * @see visibleIf
+   * @see choicesEnableIf
+   */
+  @property() choicesVisibleIf: string;
+  /**
+   * A Boolean expression that is evaluated against each choice item. If the expression evaluates to `false`, the choice item becomes read-only.
+   *
+   * A survey parses and runs all expressions on startup. If any values used in the expression change, the survey re-evaluates it.
+   *
+   * Use the `{item}` placeholder to reference the current choice item in the expression.
+   *
+   * Refer to the following help topic for more information: [Conditional Visibility](https://surveyjs.io/form-library/documentation/design-survey-conditional-logic#conditional-visibility).
+   * @see enableIf
+   * @see choicesVisibleIf
+   */
+  @property() choicesEnableIf: string;
+  public surveyChoiceItemVisibilityChange(): void {
+    this.filterItems();
+  }
+  public addUsedLocales(locales: Array<string>) {
+    super.addUsedLocales(locales);
+    this.forEachNestedElement(info => {
+      (<PanelModel>info.element).addUsedLocales(locales);
+    }, allChoicePanels);
+  }
+  protected runConditionCore(properties: HashTable<any>): void {
+    super.runConditionCore(properties);
+    this.runItemsEnableCondition(properties);
+    this.runItemsCondition(properties);
+    this.choices.forEach(item => {
+      item.runConditionCore(properties);
+    });
+    this.forEachNestedElement(info => {
+      (<PanelModel>info.element).runCondition(properties);
+    }, allChoicePanels);
+  }
+  protected isTextValue(): boolean {
+    return true; //for comments and others
+  }
+  protected setDefaultIntoValue(val: any): void {
+    if (!this.isValueEmpty(val) && !this.waitingChoicesByURL && this.showOtherItem && this.hasUnknownValue(val, true)) {
+      this.setDefaultUnknownValue(val);
+    } else {
+      super.setDefaultIntoValue(val);
+    }
+  }
+  protected setDefaultUnknownValue(val : any): void {
+    this.renderedValue = this.setOtherValueIntoValue(val);
+    this.otherValue = val;
+  }
+  protected valueToData(val: any): any {
+    if (Helpers.isValueEmpty(val)) return val;
+    if (Array.isArray(val)) {
+      return val.length > 0 ? val[0] : undefined;
+    }
+    return val;
+  }
+  protected getCorrectAnswerValue(): any {
+    const val = super.getCorrectAnswerValue();
+    if (this.isValueEmpty(val) || this.isLoadingFromJson || this.visibleChoices.length === 0) return val;
+    if (Array.isArray(val)) {
+      const res = val.filter((item) => this.isCorrectAnswerValueExists(item));
+      return res.length > 0 ? res : undefined;
+    }
+    return this.isCorrectAnswerValueExists(val) ? val : undefined;
+  }
+  protected isCorrectAnswerValueExists(val: any): boolean {
+    return !!this.getItemByValue(val, this.visibleChoices);
+  }
+  private updateValuePropertiesOnChoicesChanged(): void {
+    const hasCorrectAnswer = !this.isValueEmpty(this.correctAnswer);
+    const hasDefaultValue = !this.isValueEmpty(this.defaultValue);
+    if (!hasCorrectAnswer && !hasDefaultValue) return;
+    if (this.activeChoices.length === 0 || !this.canClearIncorrectValues()) return;
+    if (hasCorrectAnswer) {
+      this.updateValuePropertyOnChoicesChanged("correctAnswer");
+    }
+    if (hasDefaultValue) {
+      this.updateValuePropertyOnChoicesChanged("defaultValue");
+    }
+  }
+  private updateValuePropertyOnChoicesChanged(propName: string): void {
+    const val = (<any>this)[propName];
+    const newValue = this.getValueOnChoicesChanged(val);
+    if (this.isTwoValueEqualsInSurvey(val, newValue)) return;
+    if (this.isValueEmpty(newValue)) {
+      (<any>this)[propName] = undefined;
+      //an array-valued property keeps an empty array on resetting, so remove it explicitly
+      if (Array.isArray(this.getPropertyValue(propName))) {
+        this.clearPropertyValue(propName);
+      }
+    } else {
+      (<any>this)[propName] = newValue;
+    }
+  }
+  protected getValueOnChoicesChanged(val: any): any {
+    if (Array.isArray(val)) {
+      const res = val.filter((item) => this.valueExistsInChoices(item));
+      return res.length > 0 ? res : undefined;
+    }
+    return this.valueExistsInChoices(val) ? val : undefined;
+  }
+  protected valueExistsInChoices(val: any): boolean {
+    return !this.hasUnknownValueItem(val, true, false);
+  }
+  protected filterItems(): boolean {
+    if (
+      this.isLoadingFromJson ||
+      !this.data ||
+      this.areInvisibleElementsShowing
+    )
+      return false;
+    var properties = this.getDataFilteredProperties();
+    this.runItemsEnableCondition(properties);
+    return this.runItemsCondition(properties);
+  }
+  protected runItemsCondition(properties: HashTable<any>): boolean {
+    const hasChanges = this.runConditionsForItems(properties);
+    if (
+      !!this.filteredChoicesValue &&
+      this.filteredChoicesValue.length === this.activeChoices.length
+    ) {
+      this.filteredChoicesValue = undefined;
+    }
+    if (hasChanges) {
+      this.onVisibleChoicesChanged();
+      this.clearIncorrectOwnValue();
+    }
+    return hasChanges;
+  }
+  protected runItemsEnableCondition(properties: HashTable<any>): any {
+    const condition = this.getChoicesCondition("choicesEnableIf");
+    const hasChanged = ItemValue.runEnabledConditionsForItems(
+      this.activeChoices,
+      condition,
+      properties,
+      (item: ItemValue, val: boolean): boolean => {
+        return val && this.onEnableItemCallBack(item);
+      }
+    );
+    if (hasChanged) {
+      this.clearDisabledValues();
+    }
+    this.onAfterRunItemsEnableCondition();
+  }
+  protected onAfterRunItemsEnableCondition() { }
+  protected onEnableItemCallBack(item: ItemValue): boolean {
+    return true;
+  }
+  protected onSelectedItemValuesChangedHandler(newValue: any): void {
+    this.survey?.loadedChoicesFromServer(this);
+  }
+  protected getItemIfChoicesNotContainThisValue(value: any, text?: string): any {
+    if (this.waitingChoicesByURL) {
+      return this.createItemValue(value, text);
+    } else {
+      return null;
+    }
+  }
+  protected getSingleSelectedItem(): ItemValue {
+    const selectedItemValues = this.selectedItemValues;
+    if (this.isEmpty()) return null;
+
+    const itemValue = this.getItemByValue(this.value);
+    this.onGetSingleSelectedItem(itemValue);
+    if (!itemValue && (!selectedItemValues || this.value != selectedItemValues.id)) {
+      this.updateSelectedItemValues();
+    }
+    return itemValue || selectedItemValues || (this.isOtherSelected ? this.otherItem : this.getItemIfChoicesNotContainThisValue(this.value));
+  }
+  protected onGetSingleSelectedItem(selectedItemByValue: ItemValue): void { }
+  protected getMultipleSelectedItems(): Array<ItemValue> {
+    return [];
+  }
+  private getChoicesCondition(propertyName: string): ConditionRunner {
+    const expression = this.getExpressionFromSurvey(propertyName);
+    if (expression) {
+      return new ConditionRunner(expression);
+    }
+    return null;
+  }
+  private canSurveyChangeItemVisibility(): boolean {
+    return !!this.survey && this.choiceCallbacks.canChangeChoiceItemsVisibility();
+  }
+  private changeItemVisibility() {
+    return this.canSurveyChangeItemVisibility() ?
+      (item: ItemValue, val: boolean): boolean => this.choiceCallbacks.getChoiceItemVisibility(this, item, val)
+      : null;
+  }
+  private runConditionsForItems(properties: HashTable<any>): boolean {
+    this.filteredChoicesValue = [];
+    const calcVisibility = this.changeItemVisibility();
+    const condition = this.areInvisibleElementsShowing ? null : this.getChoicesCondition("choicesVisibleIf");
+    const choices = this.activeChoices;
+    return ItemValue.runConditionsForItems(
+      choices,
+      this.getFilteredChoices(),
+      condition,
+      properties,
+      !this.survey || !this.survey.areInvisibleElementsShowing,
+      (item: ItemValue, val: boolean): boolean => {
+        return !!calcVisibility ? calcVisibility(item, val) : val;
+      }
+    ) || this.isCarryForwardChanged(choices);
+  }
+  private isCarryForwardChanged(choices: Array<ItemValue>): boolean {
+    if (!this.isUsingCarryForward) return false;
+    const visChoices = this.visibleChoices;
+    if (visChoices.length !== choices.length) return true;
+    for (let i = 0; i < choices.length; i++) {
+      if (visChoices[i].value !== choices[i].value) return true;
+    }
+    return false;
+  }
+  protected isOtherValue(val: any): boolean {
+    return isOtherItemValue(val);
+  }
+  protected getIsItemValue(val: any, item: ItemValue): boolean {
+    return val === item.value;
+  }
+  get validatedValue(): any {
+    return this.renderedValueToDataCore(this.value);
+  }
+  protected createRestful(): ChoicesRestful {
+    return new ChoicesRestful();
+  }
+  @property() autoOtherMode: boolean;
+  protected getQuestionComment(): string {
+    if (this.showCommentArea) return super.getQuestionComment();
+    if (!!this.otherValueCore) return this.otherValueCore;
+    if (this.showCommentArea || this.getStoreOthersAsComment())
+      return super.getQuestionComment();
+    return this.otherValueCore;
+  }
+  protected selectOtherValueFromComment(val: boolean): void {
+    if (val) {
+      this.prevIsOtherSelected = true;
+    }
+    this.value = val ? this.otherItem.value : undefined;
+  }
+  private onUpdateCommentOnAutoOtherMode(newValue: string): void {
+    if (!this.autoOtherMode) return;
+    const isSelected = this.isOtherSelected;
+    if (!isSelected && !!newValue || isSelected && !newValue) {
+      this.selectOtherValueFromComment(!!newValue);
+    }
+  }
+  private getValueOnSettingOther(otherValue: string): any {
+    const val = this.rendredValueToData(this.renderedValue);
+    if (this.showCommentArea || this.getStoreOthersAsComment()) return val;
+    const item = this.getItemByValue(otherValue);
+    if (!item || item === this.otherItemValue) return val;
+    this.otherValueCore = "";
+    if (!Array.isArray(val)) return otherValue;
+    const index = val.indexOf(this.otherItem.value);
+    if (index > -1) {
+      val.splice(index, 1);
+    }
+    if (val.indexOf(otherValue) < 0) {
+      val.push(otherValue);
+    }
+    return val;
+  }
+  protected onClearValue(): void {
+    super.onClearValue();
+    this.selectedItemValues = undefined;
+  }
+  public get renderedValue(): any {
+    return this.getPropertyValue("renderedValue", null);
+  }
+  public set renderedValue(val: any) {
+    this.setRenderedValue(val, true);
+  }
+  private setRenderedValue(val: any, changeValue: boolean): void {
+    this.setPropertyValue("renderedValue", val);
+    if (changeValue && !this.isReadOnlyAttr) {
+      val = this.rendredValueToData(val);
+      if (!this.isEqualToValue(val)) {
+        this.value = val;
+      }
+    }
+    this.onRenderedValueChagned(changeValue);
+  }
+  protected onRenderedValueChagned(updateComment: boolean): void {
+    this.choices.forEach(item => {
+      this.updateItemIsCommentShowing(item, updateComment);
+      this.updateItemIsPanelShowing(item);
+    });
+    if (this.showOtherItem) {
+      this.updateItemIsCommentShowing(this.otherItem, updateComment);
+    }
+    if (this.supportElementsInChoice() && this.isSingleInputMode) {
+      (<SelectBaseSingleInputBehavior>this.singleInputBehavior).onSelectionChanged();
+    }
+  }
+  private updateItemIsPanelShowing(item: ChoiceItem) {
+    if (item && item.supportElements) {
+      item.setIsPanelShowing(item.hasElements && this.isItemSelected(item));
+    }
+  }
+  private updateItemIsCommentShowing(item: ItemValue, updateComment: boolean): void {
+    if (item.showCommentArea) {
+      const isShowing = this.isCommentShowing(item);
+      item.setIsCommentShowing(isShowing);
+      if (!isShowing && updateComment) {
+        this.setCommentValueCore(item, undefined);
+      }
+    }
+  }
+  public selectItem(item: ItemValue): void {
+    if (this.isReadOnlyAttr || !item) return;
+    const prevSelectedItem = this.getSingleSelectedItem();
+    this.renderedValue = item.value;
+    if (!!prevSelectedItem && prevSelectedItem !== this.getSingleSelectedItem()) {
+      this.onItemDeselected(prevSelectedItem);
+    }
+    this.onItemSelected(item);
+  }
+  protected onItemSelected(item: ItemValue): void {
+    if (item.showCommentArea) {
+      this.focusOtherComment(item);
+    }
+  }
+  protected onItemDeselected(item: ItemValue): void {
+    if (item.showCommentArea) {
+      this.setCommentValueCore(item, undefined);
+    }
+  }
+  private makeCommentEmpty: boolean;
+  /* What a question holds for the old record goes with it (Question.resetForAnotherRecord):
+     - the comment typed for a choice - of the visible choices too, which are copies under choicesFromQuestion;
+     - the "other" text: with showCommentArea the value reset does not clear it, and the next "other"
+       answer would write it into the new record;
+     - the "other" text typed before it, which would show the empty "other" error on a value change;
+     - the old value kept for a choices request;
+     - the comment clearing the value reset leaves pending - the next value write would carry it out. */
+  protected resetForAnotherRecord(): void {
+    super.resetForAnotherRecord();
+    const clearComment = (item: ItemValue): void => {
+      if ((<ChoiceItem>item).showCommentArea && !this.isOtherItemByValue(item))this.setCommentPropertyValue(item, undefined);
+    };
+    this.choices.forEach(clearComment);
+    this.visibleChoices.forEach(clearComment);
+    this.otherValueCore = "";
+    this.prevOtherErrorValue = undefined;
+    this.cachedValueForUrlRequests = undefined;
+    this.makeCommentEmpty = false;
+  }
+  protected setQuestionValue(newValue: any, updateIsAnswered: boolean = true, updateComment: boolean = true): void {
+    if (
+      this.isLoadingFromJson ||
+      this.isEqualToValue(newValue)
+    )
+      return;
+    this.setRenderedValue(this.rendredValueFromData(newValue), false);
+    super.setQuestionValue(newValue, updateIsAnswered);
+    this.updateChoicesDependedQuestions();
+    this.updateChoicesPanels();
+    if (!this.showCommentArea && updateComment && !this.isOtherSelected && !!this.otherValue) {
+      this.makeCommentEmpty = true;
+      this.otherValueCore = "";
+      this.setPropertyValue("comment", "");
+    }
+  }
+  protected setValueCore(newValue: any): void {
+    super.setValueCore(newValue);
+    if (this.makeCommentEmpty) {
+      this.setCommentIntoData("");
+      this.makeCommentEmpty = false;
+    }
+  }
+  protected setNewValue(newValue: any) {
+    newValue = this.valueFromData(newValue);
+    if (
+      (!this.isRunningChoices && !this.choicesByUrlValue?.isWaitingForParameters) ||
+      !this.isValueEmpty(newValue)
+    ) {
+      this.cachedValueForUrlRequests = newValue;
+    }
+    super.setNewValue(newValue);
+  }
+  protected valueFromData(val: any): any {
+    let item = this.getItemByValue(val, this.activeChoices);
+    if (!!item) {
+      return this.getChoiceValue(item, val, false);
+    }
+    return super.valueFromData(val);
+  }
+  private updateChoicesPanels(): void {
+    if (!this.supportElementsInChoice() || !this.wasRendered) return;
+    this.choices.forEach(item => {
+      if (item.isDescendantOf("choiceitem")) {
+        item.panelFirstRendering();
+      }
+    });
+    if (this.isClearValueOnHidden) {
+      this.clearValuesInVisiblePanels("onHiddenContainer");
+    }
+  }
+  protected getChoiceValue(choice: ItemValue, val: any, objOnComment: boolean): any {
+    const isObj = !!val && typeof val === "object";
+    const comment = isObj ? val[this.commentPropertyValue] : "";
+    const hasComment = !Helpers.isValueEmpty(comment);
+    if (isObj && choice.showCommentArea && (objOnComment || hasComment)) {
+      const res: any = { value: choice.value };
+      if (hasComment) res[this.commentPropertyValue] = comment;
+      return res;
+    }
+    return choice.value;
+  }
+  public getItemByValue(val: any, choices? : Array<ItemValue>): ItemValue {
+    const chs = choices || this.visibleChoices;
+    if (!!val && typeof val === "object" && !Helpers.isValueEmpty(val.value)) {
+      val = val.value;
+    }
+    return ItemValue.getItemByValue(chs, val);
+  }
+  protected rendredValueFromData(val: any): any {
+    if (!!val && typeof val === "object" && !Helpers.isValueEmpty(val.value)) {
+      const item = this.getItemByValue(val.value);
+      if (!!item) {
+        this.setCommentPropertyValue(item, val[this.commentPropertyValue]);
+        val = val.value;
+      }
+    }
+    if (this.getStoreOthersAsComment() || !this.showOtherItem) return val;
+    return this.renderedValueFromDataCore(val);
+  }
+  private getValueFromValueWithComment(val: any): any {
+    if (!!val && typeof val === "object" && !Helpers.isValueEmpty(val.value)) return val.value;
+    return val;
+  }
+  public getFilteredValue(isUnwrapped?: boolean): any {
+    return this.getValueFromValueWithComment(this.value);
+  }
+  protected rendredValueToData(val: any): any {
+    if (this.getStoreOthersAsComment()) return val;
+    return this.renderedValueToDataCore(val);
+  }
+  protected renderedValueFromDataCore(val: any): any {
+    if (!this.hasUnknownValue(val, true, false)) return this.valueFromData(val);
+    this.otherValue = val;
+    return this.otherItem.value;
+  }
+  protected renderedValueToDataCore(val: any): any {
+    if (this.isOtherValue(val) && this.needConvertRenderedOtherToDataValue()) {
+      val = this.otherValue;
+    }
+    return val;
+  }
+  protected needConvertRenderedOtherToDataValue(): boolean {
+    let val = this.otherValue;
+    if (!this.getTrimmedComment(val)) return false;
+    return this.hasUnknownValue(val, true, false);
+  }
+  protected getIsQuestionReady(): boolean {
+    return super.getIsQuestionReady() && !this.waitingChoicesByURL && !this.waitingGetChoiceDisplayValueResponse;
+  }
+  protected updateSelectedItemValues(): void {
+    if (this.waitingGetChoiceDisplayValueResponse || !this.survey || this.isEmpty()) return;
+    const value = this.value;
+    const valueArray: Array<any> = Array.isArray(value) ? value : [value];
+    const hasItemWithoutValues = valueArray.some(val => !this.getItemByValue(val, this.choices));
+    if (hasItemWithoutValues && (this.choicesLazyLoadEnabled || this.hasChoicesUrl)) {
+      this.waitingGetChoiceDisplayValueResponse = true;
+      this.updateIsReady();
+      this.choiceCallbacks.getChoiceDisplayValue({
+        question: this,
+        values: valueArray,
+        setItems: (displayValues: Array<string>, ...customValues: Array<IValueItemCustomPropValues>) => {
+          this.waitingGetChoiceDisplayValueResponse = false;
+          if (!displayValues || !displayValues.length) {
+            this.updateIsReady();
+            return;
+          }
+          const items = displayValues.map((displayValue, index) => this.createItemValue(valueArray[index], displayValue));
+          this.setCustomValuesIntoItems(items, customValues);
+          if (Array.isArray(value)) {
+            this.selectedItemValues = items;
+          } else {
+            this.selectedItemValues = items[0];
+          }
+          this.updateIsReady();
+          this.onSelectedItemValuesUpdated();
+        }
+      });
+    }
+  }
+  protected onSelectedItemValuesUpdated(): void {}
+  private setCustomValuesIntoItems(items: Array<ItemValue>, customValues: Array<IValueItemCustomPropValues>): void {
+    if (!Array.isArray(customValues) || customValues.length === 0) return;
+    customValues.forEach(customValue => {
+      const vals = customValue.values;
+      const propName = customValue.propertyName;
+      if (Array.isArray(vals)) {
+        for (let i = 0; i < items.length && i < vals.length; i++) {
+          items[i][propName] = vals[i];
+        }
+      }
+    });
+  }
+  protected hasUnknownValue(val: any, includeOther: boolean = false,
+    isFilteredChoices: boolean = true, checkEmptyValue: boolean = false): boolean {
+    if (!Array.isArray(val)) return this.hasUnknownValueItem(val, includeOther, isFilteredChoices, checkEmptyValue);
+    for (let i = 0; i < val.length; i++) {
+      if (this.hasUnknownValueItem(val[i], includeOther, isFilteredChoices, checkEmptyValue)) return true;
+    }
+    return false;
+  }
+  protected hasUnknownValueItem(val: any, includeOther: boolean = false,
+    isFilteredChoices: boolean = true, checkEmptyValue: boolean = false): boolean {
+    if (!checkEmptyValue && this.isValueEmpty(val)) return false;
+    if (includeOther && this.isOtherValue(val)) return false;
+    if (!this.hasUnknownValueItemInChoices(val, isFilteredChoices)) return false;
+    return !this.isValueInSharedQuestions(val, isFilteredChoices);
+  }
+  protected hasUnknownValueItemInChoices(val: any, isFilteredChoices: boolean): boolean {
+    if (this.showNoneItem && val == this.noneItem.value) return false;
+    if (this.showRefuseItem && val == this.refuseItem.value) return false;
+    if (this.showDontKnowItem && val == this.dontKnowItem.value) return false;
+    var choices = isFilteredChoices
+      ? this.getFilteredChoices()
+      : this.activeChoices;
+    return this.getItemByValue(val, choices) == null;
+  }
+  // Several questions may share the same valueName. In this case the value that belongs
+  // to another question choices is a known value for this question as well and it should
+  // not be treated as the "other" value.
+  private isValueInSharedQuestions(val: any, isFilteredChoices: boolean): boolean {
+    const questions = this.getQuestionsWithSameValueName();
+    for (let i = 0; i < questions.length; i++) {
+      if (!questions[i].hasUnknownValueItemInChoices(val, isFilteredChoices)) return true;
+    }
+    return false;
+  }
+  private getQuestionsWithSameValueName(): Array<QuestionSelectBase> {
+    const res: Array<QuestionSelectBase> = [];
+    if (!this.valueName || !this.survey) return res;
+    const questions = this.survey.questionsByValueName(this.getValueName());
+    if (!Array.isArray(questions) || questions.length < 2) return res;
+    questions.forEach((q: any) => {
+      if (q !== this && q.isDescendantOf && q.isDescendantOf("selectbase")) {
+        res.push(<QuestionSelectBase>q);
+      }
+    });
+    return res;
+  }
+  protected isValueDisabled(val: any): boolean {
+    var itemValue = this.getItemByValue(val, this.getFilteredChoices());
+    return !!itemValue && !itemValue.isEnabled;
+  }
+  endLoadingFromJson(): void {
+    super.endLoadingFromJson();
+    this.updateVisibleChoices();
+  }
+  public clearIncorrectValuesCallback: () => void;
+  /**
+   * An array of choice items that were added by a user. Applies only if the [`allowCustomChoices`](#allowCustomChoices) is set to `true` for this question.
+   *
+   * > Custom choices will only be stored temporarily for the duration of the current browser session. If you want to save them in a database or another data storage, handle the [`onCreateCustomChoiceItem`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#onCreateCustomChoiceItem) event.
+   * @hidefor QuestionImagePickerModel, QuestionRadiogroupModel, QuestionRankingModel, QuestionCheckboxModel
+   * @since 2.0.4
+   */
+  public get customChoices(): Array<any> {
+    return this.getItemValuesPropertyValue("customChoices");
+  }
+  public set customChoices(val: Array<any>) {
+    this.setArrayPropertyValue("customChoices", val);
+  }
+  /**
+   * Configures access to a RESTful service that returns choice items. Refer to the [`ChoicesRestful`](https://surveyjs.io/form-library/documentation/choicesrestful) class description for more information. You can also specify additional application-wide settings using the [`settings.web`](https://surveyjs.io/form-library/documentation/api-reference/settings#web) object.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/dropdown-menu-load-data-from-restful-service/ (linkStyle))
+   * @see choices
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  public get choicesByUrl(): ChoicesRestful {
+    return this.getPropertyValue("choicesByUrl", undefined, () => this.createChoicesByUrl());
+  }
+  public set choicesByUrl(val: ChoicesRestful) {
+    if (!val) return;
+    const oldVal = this.choicesByUrlValue;
+    if (!!oldVal) {
+      oldVal.dispose();
+      this.setPropertyValueDirectly("choicesByUrl", this.createChoicesByUrl());
+    }
+    this.choicesByUrl.fromJSON(val.toJSON());
+  }
+  private get choicesByUrlValue(): ChoicesRestful { return this.getPropertyValueWithoutDefault("choicesByUrl"); }
+  public get isChoicesUrlEmpty(): boolean {
+    const byUlr = this.choicesByUrlValue;
+    return !byUlr || byUlr.isEmpty;
+  }
+  private createChoicesByUrl(): ChoicesRestful {
+    const res = this.createRestful();
+    res.owner = this;
+    res.loadingOwner = this;
+    res.createItemValue = (value: any): ItemValue => {
+      return this.createItemValue(value);
+    };
+    res.beforeSendRequestCallback = (): void => {
+      this.onBeforeSendRequest();
+    };
+    res.getResultCallback = (items: Array<ItemValue>): void => {
+      this.onLoadChoicesFromUrl(items);
+    };
+    res.updateResultCallback = (items: Array<ItemValue>, serverResult: any): Array<ItemValue> => {
+      if (this.survey) {
+        return this.choiceCallbacks.updateChoicesFromServer(this, items, serverResult);
+      }
+      return items;
+    };
+
+    return res;
+  }
+  /**
+   * Gets or sets choice items. This property accepts an array of objects with the following structure:
+   *
+   * ```js
+   * {
+   *   "value": any, // A unique value to be saved in the survey results.
+   *   "text": string, // A display text. This property supports Markdown. When `text` is undefined, `value` is used.
+   *   "imageLink": string, // A link to the image or video that represents this choice value. Applies only to Image Picker questions.
+   *   "elements": Array<object>, // JSON configurations of questions and panels nested within this choice
+   *   "customProperty": any // Any property that you find useful.
+   * }
+   * ```
+   *
+   * To enable Markdown support for the `text` property, implement Markdown-to-HTML conversion in the [`onTextMarkdown`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#onTextMarkdown) event handler. For an example, refer to the following demo: [Convert Markdown to HTML with markdown-it](https://surveyjs.io/form-library/examples/edit-survey-questions-markdown/).
+   *
+   * If you add custom properties, refer to the following help topic to learn how to serialize them into JSON: [Add Custom Properties to Property Grid](https://surveyjs.io/survey-creator/documentation/property-grid#add-custom-properties-to-the-property-grid).
+   *
+   * If you need to specify only the `value` property, you can set the `choices` property to an array of primitive values, for example, `[ "item1", "item2", "item3" ]`. These values are both saved in survey results and used as display text.
+   *
+   * [Dropdown Demo](https://surveyjs.io/form-library/examples/create-dropdown-menu-in-javascript/ (linkStyle))
+   *
+   * [Checkboxes Demo](https://surveyjs.io/form-library/examples/create-checkboxes-question-in-javascript/ (linkStyle))
+   *
+   * [Radio Button Group Demo](https://surveyjs.io/form-library/examples/single-select-radio-button-group/ (linkStyle))
+   *
+   * [Ranking Demo](https://surveyjs.io/form-library/examples/add-ranking-question-to-form/ (linkStyle))
+   *
+   * [Image Picker Demo](https://surveyjs.io/form-library/examples/image-picker-question/ (linkStyle))
+   *
+   * [Conditionally Display Choice Options](https://surveyjs.io/form-library/examples/how-to-conditionally-display-choice-options/ (linkStyle))
+   *
+   * [Nest Content Within Choice Options](https://surveyjs.io/form-library/examples/nest-follow-up-questions-within-choice-options/ (linkStyle))
+   * @see choicesByUrl
+   * @see choicesFromQuestion
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property() choices: Array<any>;
+  /**
+   * Copies choice items from a specified question. Accepts a question name.
+   *
+   * If you specify this property, the [`choices`](#choices), [`choicesVisibleIf`](#choicesVisibleIf), [`choicesEnableIf`](#choicesEnableIf), and [`choicesOrder`](#choicesEnableIf) properties do not apply because their values are copied.
+   *
+   * In addition, you can specify the [`choicesFromQuestionMode`](#choicesFromQuestionMode) property if you do not want to copy all choice items.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/carry-forward-responses/ (linkStyle))
+   */
+  public get choicesFromQuestion(): string {
+    return this.getPropertyValue("choicesFromQuestion");
+  }
+  public set choicesFromQuestion(val: string) {
+    var question = this.getQuestionWithChoices();
+    this.isLockVisibleChoices = !!question && question.name === val;
+    if (!!question && question.name !== val) {
+      question.removeDependedQuestion(this);
+      if (this.isInDesignMode && !this.isLoadingFromJson && !!val) {
+        this.setPropertyValue("choicesFromQuestion", undefined);
+      }
+    }
+    this.setPropertyValue("choicesFromQuestion", val);
+    this.isLockVisibleChoices = false;
+  }
+  private isLockVisibleChoices: boolean;
+  private get isVisibleChoicesBuildBlocked(): boolean {
+    return this.isLoadingFromJson || this.isLockVisibleChoices;
+  }
+  // Set by a design-mode onSurveyLoad that does not build the visible choices; cleared by onVisibleChoicesChanged
+  private isVisibleChoicesBuildDeferred: boolean;
+  // A class that reads its visible choices in its own onSurveyLoad (ranking) builds them at load
+  protected get canDeferVisibleChoicesOnLoad(): boolean {
+    return true;
+  }
+  /* Called by every getter that returns the visible choices or a part of them. It calls
+     onVisibleChoicesChanged, so every override runs, as it would have at load. Not while the build is
+     blocked: onVisibleChoicesChanged would return early, and an override that reads visibleChoices
+     after super (checkbox, ranking) would call it again. */
+  private buildDeferredVisibleChoices(): void {
+    if (this.isVisibleChoicesBuildDeferred && !this.isDisposed && !this.isVisibleChoicesBuildBlocked) {
+      this.onVisibleChoicesChanged();
+    }
+  }
+  /**
+   * Specifies which choice items to copy from another question. Applies only when the [`choicesFromQuestion`](#choicesFromQuestion) property is specified.
+   *
+   * Possible values:
+   *
+   * - `"all"` (default) - Copies all choice items.
+   * - `"selected"` - Copies only selected choice items.
+   * - `"unselected"` - Copies only unselected choice items.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/carry-forward-responses/ (linkStyle))
+   *
+   * > Use the [`visibleChoices`](#visibleChoices) property to access copied choice items in code.
+   */
+  @property() choicesFromQuestionMode: string;
+  /**
+   * Specifies which matrix column or dynamic panel question supplies choice values. Use this property to construct choice items based on cell values in Dynamic Matrix and question values in Dynamic Panel.
+   *
+   * Each choice item consists of a value saved in survey results and a text displayed in the UI. To construct a choice item, assign the `name` of a Dynamic Matrix or Dynamic Panel to the [`choicesFromQuestion`](#choicesFromQuestion) property and specify which dynamic panel question or matrix column supplies values and which provides texts. Use the `choiceValuesFromQuestion` and [`choiceTextsFromQuestion`](#choiceTextsFromQuestion) properties for this purpose. If a choice text is empty, a choice value is used as a display text and saved in survey results.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/pipe-answers-from-dynamic-matrix-or-panel/ (linkStyle))
+   */
+  @property() choiceValuesFromQuestion: string;
+  /**
+   * Specifies which matrix column or dynamic panel question supplies choice texts. Use this property to construct choice items based on cell values in Dynamic Matrix and question values in Dynamic Panel.
+   *
+   * Each choice item consists of a value saved in survey results and a text displayed in the UI. To construct a choice item, assign the `name` of a Dynamic Matrix or Dynamic Panel to the [`choicesFromQuestion`](#choicesFromQuestion) property and specify which dynamic panel question or matrix column supplies values and which provides texts. Use the [`choiceValuesFromQuestion`](#choiceValuesFromQuestion) and `choiceTextsFromQuestion` properties for this purpose. If a choice text is empty, a choice value is used as a display text and saved in survey results.
+   *
+   * [View Demo](https://surveyjs.io/form-library/examples/pipe-answers-from-dynamic-matrix-or-panel/ (linkStyle))
+   */
+  @property() choiceTextsFromQuestion: string;
+  /**
+   * Specifies whether to hide the question if no choice items are visible.
+   *
+   * This property is useful if you show or hide choice items at runtime based on a [condition](https://surveyjs.io/form-library/documentation/questionselectbase#choicesVisibleIf).
+   */
+  @property() hideIfChoicesEmpty: boolean;
+  /**
+   * Specifies whether to keep values that cannot be assigned to this question, for example, choices unlisted in the `choices` array.
+   *
+   * > This property cannot be specified in the survey JSON schema. Use dot notation to specify it.
+   * @see clearIncorrectValues
+   */
+  @property() keepIncorrectValues: boolean;
+
+  @property() storeOthersAsComment: any;
+  /**
+   * Specifies the sort order of choice items.
+   *
+   * Possible values:
+   *
+   * - `"none"` (default) - Preserves the original order of choice items.
+   * - `"asc"`- Sorts choice items in ascending order.
+   * - `"desc"`- Sorts choice items in ascending order.
+   * - `"random"` - Displays choice items in random order.
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property({ isLowerCase: true }) choicesOrder: string;
+  /**
+   * Gets or sets a caption for the "Other" choice item.
+   * @see showOtherItem
+   */
+  public get otherText(): string {
+    return this.getLocStringText(this.locOtherText);
+  }
+  public set otherText(val: string) {
+    this.setLocStringText(this.locOtherText, val);
+  }
+  get locOtherText(): LocalizableString {
+    return this.otherItem.locText;
+  }
+  /**
+   * Displays the "Select All", "None", and "Other" choices on individual rows.
+   *
+   * [Checkboxes Demo](https://surveyjs.io/form-library/examples/create-checkboxes-question-in-javascript/ (linkStyle))
+   *
+   * [Radio Button Group Demo](https://surveyjs.io/form-library/examples/single-select-radio-button-group/ (linkStyle))
+   * @see showNoneItem
+   * @see showOtherItem
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property() separateSpecialChoices: boolean;
+  /**
+   * A placeholder for the comment area. Applies when the `showOtherItem` or `showCommentArea` property is `true`.
+   * @see showOtherItem
+   * @see showCommentArea
+   */
+  @property ({ localizable: { defaultStr: true } }) otherPlaceholder: string;
+
+  public get otherPlaceHolder(): string {
+    return this.otherPlaceholder;
+  }
+  public set otherPlaceHolder(newValue: string) {
+    this.otherPlaceholder = newValue;
+  }
+  /**
+   * Gets or sets an error message displayed when users select the "Other" choice item but leave the comment area empty.
+   * @see showOtherItem
+   */
+  @property({ localizable: { defaultStr: "Other required error", markdown: true } }) otherErrorText: string;
+  /**
+   * An array of visible choice items. Includes the "Select All", "Other", and "None" choice items if they are visible. Items are sorted according to the `choicesOrder` value.
+   * @see showNoneItem
+   * @see showOtherItem
+   * @see choicesOrder
+   * @see choices
+   * @see enabledChoices
+   */
+  public get visibleChoices(): Array<ChoiceItem> {
+    this.buildDeferredVisibleChoices();
+    return this.getPropertyValue("visibleChoices");
+  }
+  /**
+   * An array of choice items with which users can interact. Includes the "Select All", "Other", and "None" choice items if they are not disabled. Items are sorted according to the `choicesOrder` value.
+   * @see showNoneItem
+   * @see showOtherItem
+   * @see choicesOrder
+   * @see choices
+   * @see visibleChoices
+   */
+  public get enabledChoices(): Array<ItemValue> {
+    var res = [];
+    var items = this.visibleChoices;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].isEnabled) res.push(items[i]);
+    }
+    return res;
+  }
+  protected updateVisibleChoices(): void {
+    if (this.isLoadingFromJson || this.isDisposed) return;
+    var calcValue = this.calcVisibleChoices();
+    this.visibleChoicesProjection = this.carryForwardQuestionType === "array" ? this.arrayChoicesProjection : undefined;
+    var newValue = new Array<ItemValue>();
+    (calcValue || []).forEach(choice => newValue.push(choice));
+    const oldValue = this.visibleChoices;
+    if (!this.isTwoValueEquals(oldValue, newValue) || this.choicesLazyLoadEnabled) {
+      this.setArrayPropertyDirectly("visibleChoices", newValue);
+      this.updateRenderedChoices();
+    }
+  }
+  private calcVisibleChoices(): Array<ItemValue> {
+    let res = new Array<ItemValue>();
+    this.customChoices.forEach(choice => res.push(choice));
+    this.getFilteredChoices().forEach(choice => res.push(choice));
+
+    res = this.sortArrayByChoicesOrder(res);
+    this.addToVisibleChoices(res, this.isAddDefaultItems);
+    return res;
+  }
+  public setCanShowOptionItemCallback(func: (item: ItemValue) => boolean) {
+    this.canShowOptionItemCallback = func;
+    if (!!func) {
+      this.onVisibleChoicesChanged();
+    }
+  }
+  public get newItem(): ItemValue {
+    this.buildDeferredVisibleChoices();
+    return this.newItemValue;
+  }
+  protected addToVisibleChoices(items: Array<ItemValue>, isAddAll: boolean): void {
+    this.headItemsCount = 0;
+    this.footItemsCount = 0;
+    if (!this.isEmptyActiveChoicesInDesign) {
+      this.addNewItemToVisibleChoices(items, isAddAll);
+    }
+    const dict = new Array<{ index: number, item: ItemValue }>();
+    this.addNonChoicesItems(dict, isAddAll);
+    dict.sort((a: { index: number, item: ItemValue }, b: { index: number, item: ItemValue }): number => {
+      if (a.index === b.index) return 0;
+      return a.index < b.index ? -1 : 1;
+    });
+    for (let i = 0; i < dict.length; i++) {
+      const rec = dict[i];
+      if (rec.index < 0) {
+        items.splice(i, 0, rec.item);
+        this.headItemsCount++;
+      } else {
+        items.push(rec.item);
+        this.footItemsCount++;
+      }
+    }
+  }
+  protected addNewItemToVisibleChoices(items: Array<ItemValue>, isAddAll: boolean): void {
+    if (!isAddAll) return;
+    if (!this.newItemValue) {
+      this.newItemValue = this.createItemValue("newitem"); //TODO
+      this.newItemValue.isGhost = true;
+      this.newItemValue.registerFunctionOnPropertyValueChanged("isVisible", () => {
+        this.updateVisibleChoices();
+      });
+    }
+    if (this.newItemValue.isVisible && !this.isUsingCarryForward
+      && this.canShowOptionItem(() => this.newItemValue, isAddAll, false)) {
+      this.footItemsCount = 1;
+      items.push(this.newItemValue);
+    }
+  }
+  protected addNonChoicesItems(dict: Array<{ index: number, item: ItemValue }>, isAddAll: boolean): void {
+    if (this.supportNone()) {
+      this.addNonChoiceItem(dict, () => this.noneItem, isAddAll, this.showNoneItem, settings.specialChoicesOrder.noneItem);
+    }
+    if (this.supportRefuse()) {
+      this.addNonChoiceItem(dict, () => this.refuseItem, isAddAll, this.showRefuseItem, settings.specialChoicesOrder.refuseItem);
+    }
+    if (this.supportDontKnow()) {
+      this.addNonChoiceItem(dict, () => this.dontKnowItem, isAddAll, this.showDontKnowItem, settings.specialChoicesOrder.dontKnowItem);
+    }
+    if (this.supportOther()) {
+      this.addNonChoiceItem(dict, () => this.otherItem, isAddAll, this.showOtherItem, settings.specialChoicesOrder.otherItem);
+    }
+  }
+  protected addNonChoiceItem(dict: Array<{ index: number, item: ItemValue }>, getItem: () => ItemValue, isAddAll: boolean, showItem: boolean, order: Array<number>): void {
+    const item = this.canShowOptionItem(getItem, isAddAll, showItem);
+    if (item) {
+      order.forEach(val => dict.push({ index: val, item: item }));
+    }
+  }
+  private canShowOptionItem(getItem: () => ItemValue, isAddAll: boolean, hasItem: boolean): ItemValue {
+    const changeItemVisibility = this.canSurveyChangeItemVisibility();
+    if (!isAddAll && !hasItem && !changeItemVisibility) return null;
+    const item = getItem();
+    let visible: boolean = hasItem || isAddAll && (!!this.canShowOptionItemCallback ? this.canShowOptionItemCallback(item) : true);
+    if (changeItemVisibility) {
+      const calc = this.changeItemVisibility();
+      visible = calc(item, visible);
+    }
+    return visible ? item : null;
+  }
+  public isItemInList(item: ItemValue): boolean {
+    if (item === this.otherItemValue) return this.showOtherItem;
+    if (item === this.noneItemValue) return this.showNoneItem;
+    if (item === this.refuseItemValue) return this.showRefuseItem;
+    if (item === this.dontKnowItemValue) return this.showDontKnowItem;
+    if (item === this.newItemValue) return false;
+    return true;
+  }
+  protected get isAddDefaultItems(): boolean {
+    return settings.showDefaultItemsInCreator && this.isInDesignMode &&
+      !this.customWidget;
+  }
+  public getPlainData(
+    options: IPlainDataOptions = {
+      includeEmpty: true,
+      includeQuestionTypes: false,
+    }
+  ): IQuestionPlainData {
+    var questionPlainData = super.getPlainData(options);
+    if (!!questionPlainData) {
+      var values = Array.isArray(this.value) ? this.value : [this.value];
+      questionPlainData.isNode = true;
+      questionPlainData.data = (questionPlainData.data || []).concat(
+        values.map((dataValue, index) => {
+          var choice = this.getItemByValue(dataValue);
+          var choiceDataItem = <any>{
+            name: index,
+            title: this.getLocalizationString("choices_Choice"),
+            value: dataValue,
+            displayValue: this.getChoicesDisplayValue(
+              this.visibleChoices,
+              dataValue
+            ),
+            getString: (val: any) => this.getValueAsString(val),
+            isNode: false,
+          };
+          if (!!choice) {
+            (options.calculations || []).forEach((calculation) => {
+              choiceDataItem[calculation.propertyName] =
+                choice[calculation.propertyName];
+            });
+          }
+          if (this.isOtherSelected && this.otherItemValue === choice) {
+            choiceDataItem.isOther = true;
+            choiceDataItem.displayValue = this.otherValue;
+          }
+          return choiceDataItem;
+        })
+      );
+    }
+    return questionPlainData;
+  }
+  protected getDisplayValueCore(keysAsText: boolean, value: any, isReadOnly?: boolean): any {
+    value = this.getValueFromValueWithComment(value);
+    if (!this.useDisplayValuesInDynamicTexts) return value;
+    return this.getChoicesDisplayValue(this.visibleChoices, value, isReadOnly);
+  }
+  protected getDisplayValueEmpty(): string {
+    return ItemValue.getTextOrHtmlByValue(this.visibleChoices, undefined);
+  }
+  private getChoicesDisplayValue(items: ItemValue[], val: any, isReadOnly?: boolean): any {
+    if (this.isOtherValue(val) && !this.isCopiedOtherValue(items, val)) {
+      if (isReadOnly) return this.locOtherText.textOrHtml;
+      return this.otherValue ? this.otherValue : this.locOtherText.textOrHtml;
+    }
+    const selItem = this.getSingleSelectedItem();
+    if (!!selItem && this.isTwoValueEquals(selItem.value, val)) return selItem.locText.textOrHtml;
+    var str = ItemValue.getTextOrHtmlByValue(items, val);
+    return str == "" && val ? val : str;
+  }
+  // choicesFromQuestion (mode "selected") copies the source's Other as a regular item whose text is
+  // the source's typed text; its display value is that text, not this question's own Other text.
+  // The source's Other is copied only into a question without its own Other item, so the choices
+  // are searched only then: a question that shows Other pays nothing extra.
+  private isCopiedOtherValue(items: ItemValue[], val: any): boolean {
+    if (this.showOtherItem) return false;
+    const item = ItemValue.getItemByValue(items, val);
+    return !!item && !this.isBuiltInChoice(item);
+  }
+  protected getDisplayArrayValue(keysAsText: boolean, value: any,
+    onGetValueCallback?: (index: number) => any, isReadOnly?: boolean): string {
+    var items = this.visibleChoices;
+    var strs = [] as Array<string>;
+    const vals = [] as Array<any>;
+    for (var i = 0; i < value.length; i++) {
+      vals.push(!onGetValueCallback ? value[i] : onGetValueCallback(i));
+    }
+    if (this.isTwoValueEqualsInSurvey(this.value, vals)) {
+      this.getMultipleSelectedItems().forEach((item, index) => strs.push(this.getItemDisplayValue(item, vals[index], isReadOnly)));
+    }
+    if (strs.length === 0) {
+      for (var i = 0; i < vals.length; i++) {
+        let valStr = this.getChoicesDisplayValue(items, vals[i], isReadOnly);
+        if (valStr) {
+          strs.push(valStr);
+        }
+      }
+    }
+    return strs.join(settings.choicesSeparator);
+  }
+  private getItemDisplayValue(item: ItemValue, val?: any, isReadOnly?: boolean): string {
+    if (this.isOtherItemByInstance(item)) {
+      const otherDisplayValue = this.getOtherItemDisplayValue(val, isReadOnly);
+      if (otherDisplayValue !== undefined) {
+        return otherDisplayValue;
+      }
+    }
+    return item.locText.textOrHtml;
+  }
+  protected getOtherItemDisplayValue(val?: any, isReadOnly?: boolean): string | undefined {
+    if (this.showOtherItem && this.showCommentArea && !!val) {
+      return val;
+    }
+    if (this.comment) {
+      return this.comment;
+    }
+    return undefined;
+  }
+  private getFilteredChoices(): Array<ItemValue> {
+    return this.filteredChoicesValue
+      ? this.filteredChoicesValue
+      : this.activeChoices;
+  }
+  private get activeChoices(): Array<ItemValue> {
+    const question = this.getCarryForwardQuestion();
+    if (this.carryForwardQuestionType === "select") {
+      (<QuestionSelectBase>question).addDependedQuestion(this);
+      return this.getChoicesFromSelectQuestion((<QuestionSelectBase>question));
+    }
+    if (this.carryForwardQuestionType === "array") {
+      (<any>question).addDependedQuestion(this);
+      return this.getChoicesFromArrayQuestion(question);
+    }
+    if (this.isEmptyActiveChoicesInDesign) return [];
+    return this.choicesFromUrl ? this.choicesFromUrl : this.getChoices();
+  }
+  @property() isMessagePanelVisible: boolean;
+  private get isEmptyActiveChoicesInDesign(): boolean {
+    return this.isInDesignMode && (this.hasChoicesUrl || this.isMessagePanelVisible);
+  }
+  getCarryForwardQuestion(data?: ISurveyData): Question {
+    const question = this.findCarryForwardQuestion(data);
+    const selBaseQuestion = this.getQuestionWithChoicesCore(question);
+    const arrayQuestion = !selBaseQuestion ? this.getQuestionWithArrayValue(question) : null;
+    this.setCarryForwardQuestionType(!!selBaseQuestion, !!arrayQuestion);
+    return !!selBaseQuestion || !!arrayQuestion ? question : null;
+  }
+  protected getIsReadyDependsOn(): Array<Question> {
+    const res = super.getIsReadyDependsOn();
+    if (this.carryForwardQuestion) {
+      res.push(this.carryForwardQuestion);
+    }
+    return res;
+  }
+  private getQuestionWithChoices(): QuestionSelectBase {
+    return this.getQuestionWithChoicesCore(this.findCarryForwardQuestion());
+  }
+  private carryForwardQuestion: Question;
+  private findCarryForwardQuestion(data?: ISurveyData): Question {
+    if (!data) {
+      data = this.data || this.parentQuestion?.data;
+    }
+    this.carryForwardQuestion = null;
+    if (this.choicesFromQuestion && data) {
+      this.carryForwardQuestion = <Question>data.findQuestionByName(this.choicesFromQuestion);
+    }
+    return this.carryForwardQuestion;
+  }
+  private getQuestionWithChoicesCore(question: Question): QuestionSelectBase {
+    if (!!question && !!question.visibleChoices && (Serializer.isDescendantOf(question.getType(), "selectbase")) && question !== this)
+      return <QuestionSelectBase>question;
+    return null;
+  }
+  private getQuestionWithArrayValue(question: Question): Question {
+    return !!question && question.isValueArray ? question : null;
+  }
+  /* The source projects its value once for all its dependents (Question.getArrayValueChoices); the
+     items made from it are this question's own - createItemValue makes the question their owner - and
+     are kept while the projection instance is the same, so that every reader of activeChoices gets
+     them without projecting the source again. */
+  private arrayChoicesProjection: Array<{ value: any, text: any }>;
+  private arrayChoicesItems: Array<ItemValue>;
+  // The projection visibleChoices were last computed from: what updateDependedQuestion compares with.
+  private visibleChoicesProjection: Array<{ value: any, text: any }>;
+  private getChoicesFromArrayQuestion(question: Question): Array<ItemValue> {
+    if (this.isInDesignMode) return [];
+    const projection = this.getArrayQuestionProjection(question);
+    if (projection !== this.arrayChoicesProjection) {
+      this.arrayChoicesProjection = projection;
+      this.arrayChoicesItems = projection.map(item => this.createItemValue(item.value, item.text));
+    }
+    return this.arrayChoicesItems;
+  }
+  private getArrayQuestionProjection(question: Question): Array<{ value: any, text: any }> {
+    return question.getArrayValueChoices(this.choiceValuesFromQuestion, this.choiceTextsFromQuestion);
+  }
+  /* A write to any field of any record of the source reaches every dependent. When the projection
+     instance is the one the visible choices were computed from, the choices did not change, so a value
+     that was known cannot have become unknown either. The check is here and not in
+     updateVisibleChoices: that one also runs for this question's own changes (choicesOrder,
+     choicesVisibleIf, showOtherItem, ...) while the projection stays the same. */
+  private isArrayChoicesSourceUnchanged(): boolean {
+    const prev = this.visibleChoicesProjection;
+    if (!prev || this.isInDesignMode) return false;
+    const question = this.getCarryForwardQuestion();
+    if (this.carryForwardQuestionType !== "array") return false;
+    return this.getArrayQuestionProjection(question) === prev;
+  }
+  private getChoicesFromSelectQuestion(question: QuestionSelectBase): Array<ItemValue> {
+    if (this.isInDesignMode) return [];
+    const res: Array<ItemValue> = [];
+    var isSelected =
+      this.choicesFromQuestionMode == "selected"
+        ? true
+        : this.choicesFromQuestionMode == "unselected"
+          ? false
+          : undefined;
+    const choices = question.visibleChoices;
+    for (var i = 0; i < choices.length; i++) {
+      if (question.isBuiltInChoice(choices[i])) continue;
+      if (isSelected === undefined) {
+        res.push(this.copyChoiceItem(choices[i]));
+        continue;
+      }
+      var itemsSelected = question.isItemSelected(choices[i]);
+      if ((itemsSelected && isSelected) || (!itemsSelected && !isSelected)) {
+        res.push(this.copyChoiceItem(choices[i]));
+      }
+    }
+    if (this.choicesFromQuestionMode === "selected" && !this.showOtherItem && question.isOtherSelected && !!question.otherValue) {
+      res.push(this.createItemValue(question.otherItem.value, question.otherValue));
+    }
+    return res;
+  }
+  private copyChoiceItem(item: ItemValue): ItemValue {
+    const res = this.createItemValue(item.value);
+    res.setData(item);
+    return res;
+  }
+  protected get hasActiveChoices(): boolean {
+    var choices = this.visibleChoices;
+    if (!choices || choices.length == 0) {
+      this.onVisibleChoicesChanged();
+      choices = this.visibleChoices;
+    }
+    for (var i = 0; i < choices.length; i++) {
+      if (!this.isBuiltInChoice(choices[i])) return true;
+    }
+    return false;
+  }
+  // Unlike hasActiveChoices, a regular choice hidden by its visibleIf still counts:
+  // the question knows its choices even when none of them is visible right now.
+  protected get hasRegularChoices(): boolean {
+    if (this.activeChoices.some(item => !this.isBuiltInChoice(item))) return true;
+    // A copy of a ready question is complete even when it is empty (nothing is selected in the source);
+    // while the source still loads its choices (choicesByUrl), the copy may lack them.
+    const source = this.isUsingCarryForward ? this.getCarryForwardQuestion() : null;
+    return !!source && source.isReady;
+  }
+  public isBuiltInChoice(item: ItemValue): boolean {
+    return !!item && [this.otherItemValue, this.noneItemValue, this.refuseItemValue, this.dontKnowItemValue, this.newItemValue].indexOf(item) > -1;
+  }
+  public isNoneItem(item: ItemValue): boolean {
+    return item.isExclusive === true;
+  }
+  // The "Select All" item of a Checkboxes question. It is a gesture over the other items, not a
+  // value the question can hold, so getValueChoices() leaves it out.
+  public isSelectAllItem(item: ItemValue): boolean {
+    return false;
+  }
+  public isSelectQuestion(): boolean {
+    return true;
+  }
+  public getValueChoices(): Array<ItemValue> {
+    return this.visibleChoices.filter(item => !this.isSelectAllItem(item));
+  }
+  public get hasUnknownChoices(): boolean {
+    return this.choicesLazyLoadEnabled || this.waitingChoicesByURL;
+  }
+  public getValueType(): QuestionValueType {
+    const items = this.visibleChoices.filter(item => !this.isBuiltInChoice(item));
+    return items.length > 0 ? getScalarValueType(items[0].value) : super.getValueType();
+  }
+  protected getChoices(): Array<ItemValue> {
+    return this.choices;
+  }
+  /**
+   * Specifies whether to display the "Other" choice item.
+   *
+   * [Dropdown Demo](https://surveyjs.io/form-library/examples/create-dropdown-menu-in-javascript/ (linkStyle))
+   *
+   * [Checkboxes Demo](https://surveyjs.io/form-library/examples/create-checkboxes-question-in-javascript/ (linkStyle))
+   *
+   * [Radio Button Group Demo](https://surveyjs.io/form-library/examples/single-select-radio-button-group/ (linkStyle))
+   * @see otherText
+   * @see otherItem
+   * @see otherErrorText
+   * @see showCommentArea
+   * @see [settings.specialChoicesOrder](https://surveyjs.io/form-library/documentation/api-reference/settings#specialChoicesOrder)
+   */
+  @property({ onSetting: (val: boolean, obj: QuestionSelectBase) => obj.supportOther() ? val : false }) showOtherItem: boolean;
+  public get hasOther(): boolean {
+    return this.showOtherItem;
+  }
+  public set hasOther(val: boolean) {
+    this.showOtherItem = val;
+  }
+  public get requireUpdateCommentValue(): boolean { return this.showCommentArea || this.showOtherItem; }
+  public supportOther(): boolean {
+    return this.isSupportProperty("showOtherItem");
+  }
+  public supportNone(): boolean {
+    return this.isSupportProperty("showNoneItem");
+  }
+  public supportRefuse(): boolean {
+    return this.isSupportProperty("showRefuseItem");
+  }
+  public supportDontKnow(): boolean {
+    return this.isSupportProperty("showDontKnowItem");
+  }
+  protected isSupportProperty(propName: string): boolean {
+    return (
+      !this.isDesignMode ||
+      this.getPropertyByName(propName).visible
+    );
+  }
+  protected onCheckForErrors(errors: Array<SurveyError>, isOnValueChanged: boolean, fireCallback: boolean): void {
+    super.onCheckForErrors(errors, isOnValueChanged, fireCallback);
+    if (this.hasEmptyComments() && (!isOnValueChanged || this.prevOtherErrorValue)) {
+      const otherEmptyError = new OtherEmptyError(this.otherErrorText, this);
+      otherEmptyError.onUpdateErrorTextCallback = err => { err.text = this.otherErrorText; };
+      errors.push(otherEmptyError);
+    }
+  }
+  private hasEmptyComments(): boolean {
+    return !!this.getFirstEmptyRequiredComment();
+  }
+  private getFirstEmptyRequiredComment(): ItemValue {
+    const choices = this.visibleChoices;
+    for (let i = 0; i < choices.length; i++) {
+      if (this.isEmptyRequiredComment(choices[i])) return choices[i];
+    }
+    return null;
+  }
+  private isEmptyRequiredComment(item: ItemValue): boolean {
+    return (<ChoiceItem>item).isCommentRequired && this.isCommentShowing(item) && !this.getCommentValue(item);
+  }
+  // An empty required comment (including "Other") is reported as OtherEmptyError. It belongs to the
+  // comment area, so it highlights that area and must not paint the choice items as erroneous.
+  private isOtherEmptyError(error: SurveyError): boolean {
+    return error instanceof OtherEmptyError;
+  }
+  private hasVisibleOtherEmptyError(): boolean {
+    return this.errors.some(er => er.visible && er.isError && this.isOtherEmptyError(er));
+  }
+  private isItemCommentOnError(item: ItemValue): boolean {
+    return this.isEmptyRequiredComment(item) && this.hasVisibleOtherEmptyError();
+  }
+  protected hasItemsCssError(): boolean {
+    if (!this.hasCssError()) return false;
+    if (this.hasCssErrorCallback()) return true;
+    return this.errors.some(er => er.visible && er.isError && !this.isOtherEmptyError(er));
+  }
+  public getFirstQuestionToFocus(withError: boolean): Question {
+    return super.getFirstQuestionToFocus(withError) || this.getFirstNestedQuestionToFocus(withError);
+  }
+  protected getFirstErrorInputElementId(): string | (() => HTMLElement) {
+    if (!this.hasItemsCssError() && this.hasVisibleOtherEmptyError()) {
+      const item = this.getFirstEmptyRequiredComment();
+      if (!!item) return this.getItemCommentId(item);
+    }
+    return super.getFirstErrorInputElementId();
+  }
+  public setSurveyImpl(value: ISurveyImpl, isLight?: boolean): void {
+    this.runningChoicesScope.run(() => super.setSurveyImpl(value, isLight));
+    this.runChoicesByUrl();
+    if (this.isAddDefaultItems) {
+      this.updateVisibleChoices();
+    }
+    this.randomSeedChanged();
+  }
+  protected setSurveyCore(value: ISurvey): void {
+    super.setSurveyCore(value);
+    if (!!value && !!this.choicesFromQuestion) {
+      this.onVisibleChoicesChanged();
+    }
+  }
+  public getStoreOthersAsComment(): boolean {
+    if (this.showCommentArea) return false;
+    if (this.checkHasChoicesComments()) return true;
+    return (
+      this.storeOthersAsComment === true ||
+      (this.storeOthersAsComment == "default" &&
+        (this.survey != null ? this.choiceCallbacks.storeOthersAsComment : true)) ||
+      (this.hasChoicesUrl && !this.choicesFromUrl)
+    );
+  }
+  private checkHasChoicesComments(): boolean {
+    const choices = this.choices;
+    for (let i = 0; i < choices.length; i++) {
+      if (choices[i].showCommentArea) return true;
+    }
+    return false;
+  }
+  onSurveyLoad(): void {
+    this.runChoicesByUrl();
+    if (this.isAddDefaultItems && this.canDeferVisibleChoicesOnLoad) {
+      /* In design mode the visible choices carry the designer's placeholder items (the new item, None,
+         Other, Select All, ...). Creator rebuilds them for every question it renders
+         (setCanShowOptionItemCallback), and most questions of a large survey never render, so they are
+         built on first read. The carry-forward type is read without the choices (the visibility of the
+         choicesFromQuestion* properties, Creator's banner), so it is set here. That does not build this
+         question's choices; it reads the source question's visibleChoices, which builds the source's. */
+      this.isVisibleChoicesBuildDeferred = true;
+      if (!!this.choicesFromQuestion) {
+        this.getCarryForwardQuestion();
+      }
+    } else {
+      this.onVisibleChoicesChanged();
+    }
+    this.forEachNestedElement(info => { (<PanelModel>info.element).onSurveyLoad(); }, allChoicePanels);
+    super.onSurveyLoad();
+  }
+  protected onFirstRenderingCore(): void {
+    super.onFirstRenderingCore();
+    this.forEachNestedElement(info => { (<PanelModel>info.element).onFirstRendering(); }, showingChoicePanels);
+  }
+  onAnyValueChanged(name: string, questionName: string): void {
+    super.onAnyValueChanged(name, questionName);
+    if (name != this.getValueName()) {
+      this.runChoicesByUrl();
+    }
+    const chQuestion = this.choicesFromQuestion;
+    // The same write reached updateDependedQuestion already, which recorded the projection it used.
+    if (!!name && chQuestion && (name === chQuestion || questionName === chQuestion) && !this.isArrayChoicesSourceUnchanged()) {
+      this.onVisibleChoicesChanged();
+      this.clearIncorrectOwnValue();
+    }
+  }
+  public updateValueFromSurvey(newValue: any, clearData: boolean): void {
+    var newComment = "";
+    if (this.showOtherItem && this.activeChoices.length > 0 &&
+      !this.isRunningChoices && this.getStoreOthersAsComment()) {
+      if (this.hasUnknownValue(newValue) && !this.isOtherValue(newValue)) {
+        newComment = this.getCommentFromValue(newValue);
+        newValue = this.setOtherValueIntoValue(newValue);
+      } else {
+        if (this.data) {
+          newComment = this.data.getComment(this.getValueName());
+        }
+      }
+    }
+    super.updateValueFromSurvey(newValue, clearData);
+    if (this.isRunningChoices && !this.isEmpty()) {
+      this.cachedValueForUrlRequests = this.value;
+    }
+    if (!!newComment) {
+      this.isUpdatingValueFromSurvey = true;
+      try {
+        this.setNewComment(newComment);
+      } finally {
+        this.isUpdatingValueFromSurvey = false;
+      }
+    }
+    this.updateValueForPanels(clearData, false);
+  }
+  updateCommentFromSurvey(newValue: any): any {
+    super.updateCommentFromSurvey(newValue);
+    this.updateValueForPanels(false, true);
+  }
+  // Every created panel, showing or not: the questions of a hidden panel hold their values too.
+  private updateValueForPanels(clearData: boolean, isComment: boolean): void {
+    if (this.data) {
+      this.forEachNestedElement(info => {
+        (<PanelModel>info.element).questions.forEach(q => {
+          const valName = q.getValueName();
+          if (isComment) {
+            q.updateCommentFromSurvey(this.data.getComment(valName));
+          } else {
+            q.updateValueFromSurvey(this.data.getValue(valName), clearData);
+          }
+        });
+      }, allChoicePanels);
+    }
+  }
+  protected getCommentFromValue(newValue: any): string {
+    return newValue;
+  }
+  protected setOtherValueIntoValue(newValue: any): any {
+    return this.otherItem.value;
+  }
+  private onOtherValueInput(item: ItemValue, event: any): void {
+    if (this.isInputTextUpdate && event.target) {
+      this.setCommentValueCore(item, event.target.value);
+    }
+  }
+  private onOtherValueChange(item: ItemValue, event: any): void {
+    const target = event.target;
+    if (!target) return;
+    this.setCommentValueCore(item, target.value || "");
+    const val = this.getCommentValueCore(item);
+    if (val !== target.value) {
+      target.value = val || "";
+    }
+  }
+  private runningChoicesScope = new Scope();
+  private get isRunningChoicesValue(): boolean {
+    return this.runningChoicesScope.isActive;
+  }
+  private runChoicesByUrl() {
+    this.updateIsUsingRestful();
+    if (!this.choicesByUrlValue || this.isLoadingFromJson || this.isRunningChoicesValue || this.isInDesignMode || this.choicesLazyLoadEnabled)
+      return;
+    var processor = this.surveyImpl
+      ? this.surveyImpl.getTextProcessor()
+      : this.textProcessor;
+    if (!processor) processor = this.survey;
+    if (!processor) return;
+    this.updateIsReady();
+    this.runningChoicesScope.run(() => this.choicesByUrl.run(processor));
+  }
+  private get isRunningChoices(): boolean {
+    return this.isRunningChoicesValue || this.choicesByUrlValue?.isRunning;
+  }
+  private isFirstLoadChoicesFromUrl = true;
+  protected onBeforeSendRequest() {
+    if (settings.web.disableQuestionWhileLoadingChoices === true && !this.isReadOnly) {
+      this.enableOnLoadingChoices = true;
+      this.readOnly = true;
+    }
+  }
+  protected onLoadChoicesFromUrl(array: Array<ItemValue>): void {
+    if (this.enableOnLoadingChoices) {
+      this.readOnly = false;
+    }
+    const errors = [];
+    if (!this.isReadOnly) {
+      const choicesByUrl = this.choicesByUrlValue;
+      if (choicesByUrl && choicesByUrl.error) {
+        errors.push(choicesByUrl.error);
+      }
+    }
+    var newChoices = null;
+    var checkCachedValuesOnExisting = true;
+    if (
+      this.isFirstLoadChoicesFromUrl &&
+      !this.cachedValueForUrlRequests &&
+      this.defaultValue
+    ) {
+      this.cachedValueForUrlRequests = this.defaultValue;
+      checkCachedValuesOnExisting = false;
+    }
+    if (this.isValueEmpty(this.cachedValueForUrlRequests)) {
+      this.cachedValueForUrlRequests = this.value;
+    }
+    var cachedValues = this.createCachedValueForUrlRequests(
+      this.cachedValueForUrlRequests,
+      checkCachedValuesOnExisting
+    );
+    if (array && (array.length > 0 || this.choicesByUrlValue?.allowEmptyResponse)) {
+      newChoices = new Array<ItemValue>();
+      ItemValue.setData(newChoices, array);
+    }
+    if (!!newChoices) {
+      for (var i = 0; i < newChoices.length; i++) {
+        newChoices[i].locOwner = this;
+      }
+    }
+    this.setChoicesFromUrl(newChoices, errors, cachedValues);
+  }
+  private canAvoidSettChoicesFromUrl(newChoices: Array<ItemValue>): boolean {
+    if (this.isFirstLoadChoicesFromUrl) return false;
+    const chocesAreEmpty = !newChoices || Array.isArray(newChoices) && newChoices.length === 0;
+    if (chocesAreEmpty && !this.isEmpty()) return false;
+    return Helpers.isTwoValueEquals(this.choicesFromUrl, newChoices);
+  }
+  private setChoicesFromUrl(newChoices: Array<ItemValue>, errors: Array<any>, cachedValues: any): void {
+    if (this.canAvoidSettChoicesFromUrl(newChoices)) return;
+    this.isFirstLoadChoicesFromUrl = false;
+    this.choicesFromUrl = newChoices;
+    this.filterItems();
+    this.onVisibleChoicesChanged();
+    // The loaded choices decide the value: a value they drop is a system clear (data.keepEmptyValues)
+    this.runDeletingEmptyValues((): void => this.updateValueOnChoicesFromUrl(newChoices, cachedValues));
+    this.errors = errors;
+    this.choicesLoaded();
+  }
+  private updateValueOnChoicesFromUrl(newChoices: Array<ItemValue>, cachedValues: any): void {
+    if (newChoices) {
+      var newValue = this.updateCachedValueForUrlRequests(
+        cachedValues,
+        newChoices
+      );
+      if (!!newValue && !this.isReadOnly) {
+        var hasChanged = !this.isEqualToValue(newValue.value);
+        try {
+          if (!this.isValueEmpty(newValue.value)) {
+            this.allowNotifyValueChanged = false;
+            this.setQuestionValue(undefined, true, false);
+          }
+          this.allowNotifyValueChanged = hasChanged;
+          if (hasChanged) {
+            this.value = newValue.value;
+          } else {
+            this.setQuestionValue(newValue.value, true, false);
+          }
+        } finally {
+          this.allowNotifyValueChanged = true;
+        }
+      }
+    }
+    if (!this.isReadOnly && !newChoices && !this.isFirstLoadChoicesFromUrl) {
+      this.value = null;
+    }
+  }
+  private createCachedValueForUrlRequests(
+    val: any,
+    checkOnExisting: boolean
+  ): any {
+    if (this.isValueEmpty(val)) return null;
+    if (Array.isArray(val)) {
+      var res = [];
+      for (var i = 0; i < val.length; i++) {
+        res.push(this.createCachedValueForUrlRequests(val[i], true));
+      }
+      return res;
+    }
+    var isExists = checkOnExisting ? !this.hasUnknownValue(val) : true;
+    return { value: val, isExists: isExists };
+  }
+  private updateCachedValueForUrlRequests(
+    val: any,
+    newChoices: Array<ItemValue>
+  ): any {
+    if (this.isValueEmpty(val)) return null;
+    if (Array.isArray(val)) {
+      var res = [];
+      for (var i = 0; i < val.length; i++) {
+        var updatedValue = this.updateCachedValueForUrlRequests(
+          val[i],
+          newChoices
+        );
+        if (updatedValue && !this.isValueEmpty(updatedValue.value)) {
+          var newValue = updatedValue.value;
+          var item = this.getItemByValue(updatedValue.value, newChoices);
+          if (!!item) {
+            newValue = item.value;
+          }
+          res.push(newValue);
+        }
+      }
+      return { value: res };
+    }
+    var value =
+      val.isExists && this.hasUnknownValue(val.value) ? null : val.value;
+    var item = this.getItemByValue(value, newChoices);
+    if (!!item) {
+      value = item.value;
+    }
+    return { value: value };
+  }
+  private choicesDependedQuestionsUpdateScope = new Scope();
+  protected updateChoicesDependedQuestions(): void {
+    if (this.isLoadingFromJson || this.choicesDependedQuestionsUpdateScope.isActive ||
+      !this.allowNotifyValueChanged || this.isRunningChoices) return;
+    this.choicesDependedQuestionsUpdateScope.run(() => this.updateDependedQuestions());
+  }
+  protected updateDependedQuestion(): void {
+    if (this.isArrayChoicesSourceUnchanged()) return;
+    this.onVisibleChoicesChanged();
+    this.clearIncorrectOwnValue();
+  }
+  onSurveyValueChanged(newValue: any): void {
+    super.onSurveyValueChanged(newValue);
+    this.updateChoicesDependedQuestions();
+  }
+  protected onVisibleChoicesChanged(): void {
+    if (this.isVisibleChoicesBuildBlocked) return;
+    // Cleared before updateVisibleChoices: it reads the visibleChoices getter, which would build again
+    this.isVisibleChoicesBuildDeferred = false;
+    this.updateVisibleChoices();
+    if (this.isOtherValue(this.renderedValue)) {
+      this.setRenderedValue(this.rendredValueFromData(this.value), false);
+    }
+    this.onVisibleChanged();
+    if (!!this.visibleChoicesChangedCallback) {
+      this.visibleChoicesChangedCallback();
+    }
+    this.updateChoicesDependedQuestions();
+  }
+  protected isVisibleCore(): boolean {
+    const superVal = super.isVisibleCore();
+    if (!this.hideIfChoicesEmpty || !superVal) return superVal;
+    var choices = this.isUsingCarryForward ? this.visibleChoices : this.getFilteredChoices();
+    return !choices || choices.length > 0;
+  }
+  private sortArrayByChoicesOrder(array: Array<ItemValue>): Array<ItemValue> {
+    const res = array.slice();
+    if (this.isInDesignMode) return res;
+
+    const order = this.choicesOrder.toLowerCase();
+    if (order == "asc") return this.sortArray(res, 1);
+    if (order == "desc") return this.sortArray(res, -1);
+    if (order == "random") return this.randomizeArray(res);
+    return res;
+  }
+  private sortArray(array: Array<ItemValue>, mult: number): Array<ItemValue> {
+    return array.sort(function (a, b) {
+      return Helpers.compareStrings(a.calculatedText, b.calculatedText) * mult;
+    });
+  }
+  public randomSeedChanged(): void {
+    if (this.choicesOrder.toLowerCase() !== "random") return;
+    this.updateVisibleChoices();
+  }
+  private randomizeArray(array: Array<ItemValue>): Array<ItemValue> {
+    return Helpers.randomizeArray<ItemValue>(array, this.randomSeed);
+  }
+  private get hasChoicesUrl(): boolean {
+    return !!this.choicesByUrlValue?.url;
+  }
+  protected verifyValueCore(val: any, context: IVerifyDataContext): boolean {
+    if (!super.verifyValueCore(val, context)) return false;
+    if (context.checks.reportInvalidValueTypes && !this.isValueShapeCorrect(val)) {
+      context.addIssue("invalidValueType", undefined, val, this);
+      return false;
+    }
+    if (!context.checks.reportInvalidChoiceValues) return true;
+    // The guards below are about the definition and not about the value: a choicesByUrl that has
+    // not loaded, a question that allows custom choices, a valueName shared by several questions.
+    // The choices of such a question are not known here, so nothing is reported.
+    if (!this.canClearIncorrectValues() || !this.hasValueToClearIncorrectValues()) return true;
+    if (!this.canClearValueAnUnknown(val)) return true;
+    if (!Array.isArray(val)) {
+      context.addIssue("invalidChoiceValue", undefined, val, this);
+      return true;
+    }
+    // One finding per offending item, addressed by its index in the value.
+    val.forEach((item, index) => {
+      if (!this.hasUnknownValue(item, true, true, true)) return;
+      context.addIssue("invalidChoiceValue", index, item, this);
+    });
+    return true;
+  }
+  // A single-select question does not store an array and a multi-select question stores nothing else.
+  private isValueShapeCorrect(val: any): boolean {
+    return Array.isArray(val) === (this.getValueType() === "array");
+  }
+  /* The answer only. The questions of the choice panels are cleaned by clearIncorrectValues() after it,
+     even when the answer had a wrong shape: they store at the root. The question's own clean-ups below call
+     this one and keep their scope. */
+  protected clearIncorrectOwnValue(): void {
+    if (!this.isEmpty() && !this.isValueShapeCorrect(this.value)) {
+      this.clearValue(true);
+      return;
+    }
+    // keepIncorrectValues is read here, not in the check code: setData() ignores it.
+    if (this.isKeepIncorrectValues) return;
+    if (!this.canClearIncorrectValues() || !this.hasValueToClearIncorrectValues()) return;
+    if (this.clearIncorrectValuesCallback) {
+      this.clearIncorrectValuesCallback();
+    } else {
+      this.clearIncorrectValuesCore();
+    }
+  }
+  private canClearIncorrectValues(): boolean {
+    if (this.canAddCustomChoices()) return false;
+    if (this.carryForwardQuestion && !this.carryForwardQuestion.isReady) return false;
+    if (!!this.survey && this.survey.questionsByValueName(this.getValueName()).length > 1) return false;
+    // Only validate against successfully loaded choices. An empty list is valid,
+    // but missing URL parameters, pending requests, and errors are not results.
+    if (this.hasChoicesUrl && (!this.choicesFromUrl || this.isRunningChoicesValue ||
+      !this.choicesByUrlValue.canUseResult)) return false;
+    return true;
+  }
+  protected canAddCustomChoices(): boolean {
+    return false;
+  }
+  protected hasValueToClearIncorrectValues(): boolean {
+    return !this.isEmpty();
+  }
+  // A select question has its own keepIncorrectValues next to the survey one.
+  protected get isKeepIncorrectValues(): boolean {
+    return super.isKeepIncorrectValues || !!this.keepIncorrectValues;
+  }
+  protected clearValueIfInvisibleCore(reason: string): void {
+    super.clearValueIfInvisibleCore(reason);
+    this.clearIncorrectOwnValue();
+    this.clearValuesInVisiblePanels(reason);
+  }
+  /* The clearIncorrectValues part, over the question's own choices: a known answer stays and an unknown
+     single answer goes. Left to a built question: an answer of another shape, a list with an unknown
+     item (a checkbox drops only that item), an unknown answer next to an "Other" item (it may be the
+     other text), and choices a callback or an onShowingChoiceItem handler can change. */
+  protected getAnswerCleanupAtCompleteCore(value: any): string {
+    if (!this.isValueShapeCorrect(value) || !!this.clearIncorrectValuesCallback || this.canSurveyChangeItemVisibility()) return undefined;
+    if (!this.hasUnknownValue(value, true, true, true)) return "keep";
+    if (Array.isArray(value) || this.showOtherItem) return undefined;
+    return this.isKeepIncorrectValues || !this.canClearIncorrectValues() ? "keep" : "clear";
+  }
+  private clearValuesInVisiblePanels(reason: string): void {
+    // The panels that are not showing.
+    this.forEachNestedElement(info => {
+      if (info.visible) return;
+      const questions = (<PanelModel>info.element).questions;
+      questions.forEach((q) => { q.clearValue(); });
+      questions.forEach((q) => { q.clearValueIfInvisible(reason); });
+    }, allChoicePanels);
+  }
+  /**
+   * Returns `true` if a passed choice item is selected.
+   *
+   * To obtain a choice item to check, use the `noneItem` or `otherItem` property or the `choices` array.
+   * @param item A choice item.
+   * @see noneItem
+   * @see otherItem
+   * @see choices
+   */
+  public isItemSelected(item: ItemValue): boolean {
+    if (this.isOtherItemByInstance(item)) return this.isOtherSelected;
+    return this.isItemSelectedCore(item);
+  }
+  protected isItemSelectedCore(item: ItemValue): boolean {
+    return item.value === this.renderedValue;
+  }
+  private clearDisabledValues() {
+    if (!this.survey || !this.choiceCallbacks.clearDisabledChoices) return;
+    this.clearDisabledValuesCore();
+  }
+  protected clearIncorrectValuesCore(): void {
+    var val = this.value;
+    if (this.canClearValueAnUnknown(val)) {
+      this.clearValue(true);
+    }
+  }
+  protected canClearValueAnUnknown(val: any): boolean {
+    if (!this.getStoreOthersAsComment() && this.isOtherSelected) return false;
+    return this.hasUnknownValue(val, true, true, true);
+  }
+  protected clearDisabledValuesCore() {
+    if (this.isValueDisabled(this.value)) {
+      this.clearValue(true);
+    }
+  }
+  clearUnusedValues() {
+    super.clearUnusedValues();
+    if (this.isOtherValueUnused()) {
+      this.otherValue = "";
+    }
+  }
+  protected isOtherValueUnused(): boolean {
+    return !this.isOtherSelected;
+  }
+  getColumnClass(): string {
+    return toCssClasses(this.cssClasses.column, this.hasColumns && "sv-q-column-" + this.colCount);
+  }
+  getItemIndex(item: any): number {
+    return this.visibleChoices.indexOf(item);
+  }
+  getItemClass(item: any): string {
+    const options: any = { item: item };
+    var res = this.getItemClassCore(item, options);
+    options.css = res;
+    if (!!this.survey) {
+      this.cssCallbacks.updateChoiceItemCss(this, options);
+    }
+    return options.css;
+  }
+  protected getCurrentColCount(): number {
+    return this.colCount;
+  }
+  protected getItemClassCore(item: any, options: any): string {
+    const readOnlyStyles = this.getIsDisableAndReadOnlyStyles(!item.isEnabled);
+    const isReadOnly = readOnlyStyles[0];
+    const isDisabled = readOnlyStyles[1];
+    const isChecked = this.isItemSelected(item);
+    const allowHover = !isDisabled && !(!!this.survey && this.survey.isDesignMode);
+    const isNone = item === this.noneItemValue;
+    options.isDisabled = isDisabled || isReadOnly;
+    options.isChecked = isChecked;
+    options.isNone = isNone;
+
+    return toCssClasses(
+      this.cssClasses.item,
+      !this.hasColumns && this.colCount === 0 && this.cssClasses.itemInline,
+      !this.hasColumns && this.colCount !== 0 && "sv-q-col-" + this.getCurrentColCount(),
+      this.hasItemsCssError() && this.cssClasses.itemOnError,
+      isDisabled && this.cssClasses.itemDisabled,
+      isReadOnly && this.cssClasses.itemReadOnly,
+      this.isPreviewStyle && this.cssClasses.itemPreview,
+      isChecked && this.cssClasses.itemChecked,
+      allowHover && this.cssClasses.itemHover,
+      isNone && this.cssClasses.itemNone
+    );
+  }
+
+  getLabelClass(item: ItemValue): string {
+    return toCssClasses(this.cssClasses.label, this.isItemSelected(item) && this.cssClasses.labelChecked);
+  }
+  getControlLabelClass(item: ItemValue): string {
+    return toCssClasses(this.cssClasses.controlLabel, this.isItemSelected(item) && this.cssClasses.controlLabelChecked) || undefined;
+  }
+
+  @propertyArray() _renderedChoices: Array<ItemValue> = [];
+
+  public onGetRenderedChoicesCallback?: (visibleChoices: Array<ItemValue>) => Array<ItemValue>;
+
+  private updateRenderedChoices() {
+    this.renderedChoices = this.onGetRenderedChoicesCallback ? this.onGetRenderedChoicesCallback(this.visibleChoices) : this.visibleChoices;
+  }
+
+  private getRenderedChoicesAnimationOptions(): IAnimationGroupConsumer<ItemValue> {
+    return {
+      isAnimationEnabled: () => {
+        return this.animationAllowed;
+      },
+      getRerenderEvent: () => {
+        return this.onElementRerendered;
+      },
+      getKey: (item) => item != this.newItemValue ? item.value : this.newItemValue,
+      getLeaveOptions: (item: ItemValue) => {
+        let cssClass = this.cssClasses.itemLeave;
+        if (this.hasColumns) {
+          const index = this.bodyItems.indexOf(item);
+          if (index !== -1 && index !== this.bodyItems.length - 1) {
+            cssClass = "";
+          }
+        }
+        return {
+          cssClass,
+          onBeforeRunAnimation: prepareElementForVerticalAnimation,
+          onAfterRunAnimation: cleanHtmlElementAfterAnimation
+        };
+      },
+      getAnimatedElement: (item: ItemValue) => {
+        return item.getRootElement();
+      },
+      getEnterOptions: (item: ItemValue) => {
+        let cssClass = this.cssClasses.itemEnter;
+        if (this.hasColumns) {
+          const index = this.bodyItems.indexOf(item);
+          if (index !== -1 && index !== this.bodyItems.length - 1) {
+            cssClass = "";
+          }
+        }
+        return {
+          cssClass: cssClass,
+          onBeforeRunAnimation: (el) => {
+            if (this.getCurrentColCount() == 0 && this.bodyItems.indexOf(item) >= 0) {
+              const leftPosition = (el.parentElement.firstElementChild as HTMLElement).offsetLeft;
+              if (el.offsetLeft > leftPosition) {
+                setPropertiesOnElementForAnimation(el, { moveAnimationDuration: "0s", fadeAnimationDelay: "0s" }, "--");
+              }
+            }
+            prepareElementForVerticalAnimation(el);
+          },
+          onAfterRunAnimation: cleanHtmlElementAfterAnimation
+        };
+      }
+    };
+  }
+  private renderedChoicesAnimation = new AnimationGroup(
+    this.getRenderedChoicesAnimationOptions(),
+    (val) => {
+      this._renderedChoices = val;
+      this.renderedChoicesChangedCallback && this.renderedChoicesChangedCallback();
+    },
+    () => this._renderedChoices
+  );
+
+  public get renderedChoices(): Array<ItemValue> {
+    this.buildDeferredVisibleChoices();
+    return this._renderedChoices;
+  }
+  public set renderedChoices(val: Array<ItemValue>) {
+    this.renderedChoicesAnimation.sync(val);
+  }
+
+  private headItemsCount: number = 0;
+  private footItemsCount: number = 0;
+  get headItems(): ItemValue[] {
+    this.buildDeferredVisibleChoices();
+    const count = (this.separateSpecialChoices || this.isInDesignMode) ? this.headItemsCount : 0;
+    const res = [];
+    for (let i = 0; i < count; i++) {
+      if (this.renderedChoices[i]) {
+        res.push(this.renderedChoices[i]);
+      }
+    }
+    return res;
+  }
+  get footItems(): ItemValue[] {
+    this.buildDeferredVisibleChoices();
+    const count = (this.separateSpecialChoices || this.isInDesignMode) ? this.footItemsCount : 0;
+    const res = [];
+    const items = this.renderedChoices;
+    for (let i = 0; i < count; i++) {
+      if (this.renderedChoices[items.length - count + i]) {
+        res.push(this.renderedChoices[items.length - count + i]);
+      }
+    }
+    return res;
+  }
+  get dataChoices(): ItemValue[] {
+    return this.renderedChoices.filter((item) => !this.isBuiltInChoice(item));
+  }
+  get bodyItems(): ItemValue[] {
+    return (this.hasHeadItems || this.hasFootItems) ? this.dataChoices : this.renderedChoices;
+  }
+  get hasHeadItems(): boolean {
+    return this.headItems.length > 0;
+  }
+  get hasFootItems(): boolean {
+    return this.footItems.length > 0;
+  }
+  protected get itemFlowDirection() {
+    return settings.itemFlowDirection;
+  }
+  get columns() {
+    if (!this.hasColumns || this.renderedChoices.length === 0) return [];
+
+    const colCount = this.getCurrentColCount();
+    let choicesToBuildColumns = (!this.separateSpecialChoices && !this.isInDesignMode) ?
+      this.renderedChoices : this.dataChoices;
+
+    if (this.itemFlowDirection === "column") {
+      return this.getColumnsWithColumnItemFlow(choicesToBuildColumns, colCount);
+    } else {
+      return this.getColumnsWithRowItemFlow(choicesToBuildColumns, colCount);
+    }
+  }
+  private getColumnsWithColumnItemFlow(choices, colCount) {
+    const columns = [];
+    let maxColumnHeight = Math.floor(choices.length / colCount);
+
+    if (choices.length % colCount) {
+      maxColumnHeight += 1;
+    }
+
+    let choicesLeft = choices.length;
+    let columnsLeft = colCount;
+    let indexShift = 0;
+
+    for (let i = 0; i < colCount; i++) {
+      const column = [];
+
+      for (let j = 0; j < maxColumnHeight; j++) {
+        if (choicesLeft <= columnsLeft) {
+          maxColumnHeight = 1;
+        }
+        const choice = choices[j + indexShift];
+        if (choice) {
+          column.push(choice);
+          choicesLeft--;
+        }
+      }
+      columns.push(column);
+      columnsLeft--;
+      indexShift += column.length;
+    }
+
+    return columns;
+  }
+  private getColumnsWithRowItemFlow(choices, colCount) {
+    const columns = [];
+    for (let i = 0; i < colCount; i++) {
+      const column = [];
+      for (let j = i; j < choices.length; j += colCount) {
+        column.push(choices[j]);
+      }
+      columns.push(column);
+    }
+    return columns;
+  }
+  getItemsColumnKey(itemsColumn: Array<ItemValue>) {
+    return (itemsColumn || []).map(c => c.uniqueId).join("-");
+  }
+  get hasColumns() {
+    return !this.isMobile &&
+      (this.getCurrentColCount() > 1);
+  }
+  get rowLayout() {
+    return this.getCurrentColCount() == 0 && !(this.hasFootItems || this.hasHeadItems);
+  }
+  get blockedRow() {
+    return this.getCurrentColCount() == 0 && (this.hasFootItems || this.hasHeadItems);
+  }
+
+  public choicesLoaded(): void {
+    this.isChoicesLoaded = true;
+    this.updateIsReady();
+    if (this.survey) {
+      this.choiceCallbacks.loadedChoicesFromServer(this);
+    }
+    if (this.loadedChoicesFromServerCallback) {
+      this.loadedChoicesFromServerCallback();
+    }
+  }
+  public getItemValueWrapperComponentName(item: ItemValue): string {
+    const survey: SurveyModel = this.survey as SurveyModel;
+    if (survey) {
+      return survey.getItemValueWrapperComponentName(item, this);
+    }
+    return SurveyModel.TemplateRendererComponentName;
+  }
+  public getItemValueWrapperComponentData(item: ItemValue): any {
+    const survey: SurveyModel = this.survey as SurveyModel;
+    if (survey) {
+      return survey.getItemValueWrapperComponentData(item, this);
+    }
+    return item;
+  }
+  public isOtherItem(item: ItemValue) {
+    return this.showOtherItem && this.isOtherValue(item.value);
+  }
+  protected isOtherItemByInstance(item: ItemValue): boolean {
+    const other = this.showOtherItem ? this.otherItem : this.otherItemValue;
+    return !!item && item === other;
+  }
+  public get itemSvgIcon(): string {
+    if (this.isPreviewStyle && this.cssClasses.itemPreviewSvgIconId) {
+      return this.cssClasses.itemPreviewSvgIconId;
+    }
+    return this.cssClasses.itemSvgIconId;
+  }
+  public getSelectBaseRootCss(): string {
+    return toCssClasses(this.getQuestionRootCss(), this.rowLayout && this.cssClasses.rootRow);
+  }
+  protected allowMobileInDesignMode(): boolean {
+    return true;
+  }
+
+  public getItemId(item: ItemValue) {
+    return this.inputId + "_" + this.getItemIndex(item);
+  }
+  public getItemLabelId(item: ItemValue): string {
+    return this.getItemId(item) + "_label";
+  }
+  // In design mode the item text is rendered as a focusable inline editor, so it must stay in the accessibility tree
+  public get isItemLabelAriaHidden(): boolean {
+    return !this.isDesignMode;
+  }
+  public getItemEnabled(item: ItemValue): boolean {
+    return !this.isDisabledAttr && item.isEnabled;
+  }
+  private focusOtherComment(item: ItemValue) {
+    if (!this.autoOtherMode) {
+      SurveyElement.FocusElement(this.getItemCommentId(item), false, this.survey?.rootElement, this.shouldHandleFocusScroll);
+    }
+  }
+  protected getDefaultItemComponent(): string {
+    return "";
+  }
+  /**
+   * The name of a component used to render items.
+   *
+   * [Dropdown Demo](https://surveyjs.io/form-library/examples/dropdown-box-with-custom-items/ (linkStyle))
+   *
+   * [Ranking Demo](https://surveyjs.io/form-library/examples/ranking-with-custom-items/ (linkStyle))
+   *
+   * [Checkboxes and Radio Button Group Demo](https://surveyjs.io/form-library/examples/add-custom-items-to-single-and-multi-select-questions/ (linkStyle))
+   */
+  @property({ getDefaultValue: (obj: QuestionSelectBase) => obj.getDefaultItemComponent() }) itemComponent: string;
+
+  public getCssClassesForCommentPanelAnimation(type: "comment" | "panel"): { onLeave: string, onEnter: string } {
+    const correctedType = type.charAt(0).toUpperCase() + type.slice(1);
+    return { onEnter: this.cssClasses[`item${correctedType}Enter`], onLeave: this.cssClasses[`item${correctedType}Leave`] };
+  }
+}
+
+// inputPerPage support for choices with nested elements (radiogroup, checkbox): step 0 is the
+// choice list itself, then every visible nested question of every selected choice gets its own step.
+export class SelectBaseSingleInputBehavior extends QuestionSingleInputBehavior {
+  protected get selectBase(): QuestionSelectBase {
+    return <QuestionSelectBase>this.question;
+  }
+  protected isSelfSummaryStep(): boolean {
+    return false;
+  }
+  protected getSingleInputQuestionsCore(question: Question, checkDynamic: boolean): Array<Question> {
+    const nested = new Array<Question>();
+    this.getSelectedChoicesWithElements().forEach(item => {
+      item.panel.visibleQuestions.forEach(q => q.addNestedQuestion(nested, true, false, false));
+    });
+    return nested.length > 0 ? [this.question, ...nested] : [];
+  }
+  protected validateAsSingleInput(): boolean {
+    if (this.getPropertyValue("singleInputQuestion") === this.question) {
+      return this.selectBase.validateWithoutChoicePanels();
+    }
+    return super.validateAsSingleInput();
+  }
+  protected getSingleQuestionLocTitleCore(): LocalizableString {
+    const q = this.getPropertyValue("singleInputQuestion");
+    if (!q || q === this.question) return undefined;
+    return this.getChoiceByNestedQuestion(q)?.locText;
+  }
+  // The step list follows the selection: a stored nested step whose choice got deselected falls
+  // back to the question's own step; otherwise only Next/Complete need a refresh.
+  public onSelectionChanged(): void {
+    this.question.resetSurveyProgressTotal();
+    const q = this.getPropertyValue("singleInputQuestion");
+    if (!!q && q !== this.question && this.getSingleInputQuestions().indexOf(q) < 0) {
+      this.resetSingleInput();
+    } else if (this.isSingleInputActive) {
+      this.onSingleInputChanged(false);
+    }
+  }
+  private getSelectedChoicesWithElements(): Array<ChoiceItem> {
+    const res = new Array<ChoiceItem>();
+    this.selectBase.visibleChoices.forEach(item => {
+      const choice = <ChoiceItem>item;
+      if (choice.isDescendantOf("choiceitem") && choice.hasElements && this.selectBase.isItemSelected(choice)) {
+        res.push(choice);
+      }
+    });
+    return res;
+  }
+  private getChoiceByNestedQuestion(q: Question): ChoiceItem {
+    let parent: any = q.parent;
+    while(!!parent && !parent["choiceItem"]) {
+      parent = parent.parent;
+    }
+    const item: ChoiceItem = parent?.["choiceItem"];
+    return !!item && item.locOwner === this.question ? item : undefined;
+  }
+}
+
+/**
+ * A base class for multiple-selection question types that can display choice items in multiple columns ([Checkbox](https://surveyjs.io/form-library/documentation/questioncheckboxmodel), [Radiogroup](https://surveyjs.io/form-library/documentation/questionradiogroupmodel), [Image Picker](https://surveyjs.io/form-library/documentation/questionimagepickermodel)).
+ */
+export class QuestionCheckboxBase extends QuestionSelectBase implements IChoiceShortcutsOwner {
+  colCountChangedCallback: () => void;
+  /**
+   * Gets or sets the number of columns used to arrange choice items.
+   *
+   * Set this property to 0 if you want to display all items in one line. The default value depends on the available width.
+   * @see separateSpecialChoices
+   */
+  public get colCount(): number {
+    return this.getPropertyValue("colCount", this.isFlowLayout ? 0 : undefined);
+  }
+  public set colCount(value: number) {
+    if (value < 0 || value > 5 || this.isFlowLayout) return;
+    this.setPropertyValue("colCount", value);
+    this.fireCallback(this.colCountChangedCallback);
+  }
+  protected onParentChanged() {
+    super.onParentChanged();
+    if (this.isFlowLayout) {
+      this.setPropertyValue("colCount", null);
+    }
+  }
+  protected onParentQuestionChanged() {
+    this.onVisibleChoicesChanged();
+  }
+  protected getSearchableItemValueKeys(keys: Array<string>) {
+    keys.push("choices");
+  }
+  protected getFirstInputElementId(): string {
+    return this.inputId + "_0";
+  }
+  /**
+   * Specifies whether to enable letter shortcuts for selecting choices.
+   *
+   * Default value: `undefined` (inherits the survey's [`choiceShortcutsEnabled`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#choiceShortcutsEnabled) setting)
+   *
+   * When enabled, choices display letter codes (`A`, `B`, ..., `Z`, `AA`, ...) that respondents can type while the question has focus. In questions that allow multiple selection, shortcuts toggle choice selection.
+   *
+   * Letter shortcuts are unavailable on mobile devices and in read-only or preview mode.
+   *
+   * [Demo: Letter Shortcuts](https://surveyjs.io/form-library/examples/automatically-move-to-next-page-if-answer-selected/ (linkStyle))
+   * @hidefor QuestionRankingModel
+   * @since 3.2.2
+   */
+  @property({
+    onSet: (_val, target: QuestionCheckboxBase) => {
+      if (!target.isLoadingFromJson) target.updateChoiceKeyBinding(false);
+    }
+  }) choiceShortcutsEnabled: boolean | undefined;
+  public supportsChoiceKeyboardSelection(): boolean {
+    return false;
+  }
+  public get isChoiceKeyboardSelectionEnabled(): boolean {
+    if (!this.supportsChoiceKeyboardSelection()) return false;
+    return this.choiceShortcutsEnabled ?? this.survey?.choiceShortcutsEnabled === true;
+  }
+  // Badges and the key handler share this gate. Design mode is the one exception:
+  // badges stay visible there, but canUseChoiceKeys keeps the keys inert.
+  // isReadOnly covers readonly and preview. isInputReadOnly also includes design mode,
+  // which would hide the badges in Creator.
+  public get canShowChoiceKeys(): boolean {
+    const surveyShortcut = this.survey?.choiceShortcutsEnabled === true;
+    const supported = this.supportsChoiceKeyboardSelection();
+    const isMobile = this.isMobile;
+    const isReadOnly = this.isReadOnly;
+    const own = this.choiceShortcutsEnabled;
+    return supported && !isMobile && !isReadOnly && (own ?? surveyShortcut);
+  }
+  private choiceShortcuts = new ChoiceShortcuts(this);
+  private get canUseChoiceKeys(): boolean {
+    return this.choiceShortcuts.canUse;
+  }
+  public onSurveyLoad(): void {
+    super.onSurveyLoad();
+    this.updateChoiceKeyBinding(true);
+  }
+  public setSurveyImpl(value: ISurveyImpl, isLight?: boolean): void {
+    super.setSurveyImpl(value, isLight);
+    // A question built on its own (toolbox drop) runs onSurveyLoad before it joins a survey,
+    // so the badge updater never subscribed to the survey flag. Rebind once the survey is set.
+    if (!this.isLoadingFromJson) {
+      this.updateChoiceKeyBinding(true);
+    }
+  }
+  public onSurveyChoiceShortcutsEnabledChanged(): void {
+    super.onSurveyChoiceShortcutsEnabledChanged();
+    this.updateChoiceKeyBinding(false);
+  }
+  public dispose(): void {
+    this.disposeChoiceKeyUpdater();
+    this.choiceShortcuts.dispose();
+    super.dispose();
+  }
+  @property({
+    onSet: (_val: string, obj: QuestionCheckboxBase) => obj.choiceShortcuts.applyBadges()
+  })
+  private choiceKeyState: string;
+  private get isChoiceKeyStateBound(): boolean {
+    return !!this.dependencies["choiceKeyState"];
+  }
+  /* The badges are bound only while the flags enable them: a select question with shortcuts off holds no
+     handler on the survey, its parents or itself. rebind: the survey or the parent changed, and the
+     dependencies collected against the old ones are stale, so an existing binding is made again.
+     Otherwise (a flag changed) it binds or unbinds only when the state differs. */
+  private updateChoiceKeyBinding(rebind: boolean): void {
+    if (this.isChoiceKeyboardSelectionEnabled) {
+      if (rebind || !this.isChoiceKeyStateBound) {
+        this.bindChoiceKeyBadges();
+      }
+    } else if (this.isChoiceKeyStateBound) {
+      this.unbindChoiceKeyBadges();
+    }
+  }
+  private bindChoiceKeyBadges(): void {
+    // The updater collects its dependencies on this first run only, so buildState() and canShowChoiceKeys
+    // must read every input before combining them: an input skipped now is never observed afterwards.
+    this.choiceKeyState = new ComputedUpdater(() => this.choiceShortcuts.buildState()) as any;
+  }
+  private unbindChoiceKeyBadges(): void {
+    this.disposeChoiceKeyUpdater();
+    // Without a stored state the next binding writes its badges again, even when the state is the same.
+    this.setPropertyValue("choiceKeyState", undefined);
+    this.choiceShortcuts.applyBadges();
+  }
+  private disposeChoiceKeyUpdater(): void {
+    const updater = this.dependencies["choiceKeyState"];
+    if (!updater) return;
+    updater.dispose();
+    delete this.dependencies["choiceKeyState"];
+  }
+  public getChoiceKeyItems(): Array<ItemValue> {
+    const items = this.visibleChoices;
+    const res = new Array<ItemValue>();
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!this.isItemInList(item) || res.indexOf(item) > -1) continue;
+      res.push(item);
+    }
+    return res;
+  }
+  public selectByChoiceKey(item: ItemValue): void {
+    this.applyChoiceKeyboardSelection(item);
+    SurveyElement.FocusElement(this.getItemId(item), false, this.survey?.rootElement, this.shouldHandleFocusScroll);
+  }
+  public getChoiceKeyBadge(item: ItemValue): string {
+    return this.choiceShortcuts.badge(item);
+  }
+  public getItemShortcutKeyClass(item: ItemValue): string {
+    return toCssClasses(
+      this.cssClasses.itemShortcutKey,
+      !this.getItemEnabled(item) && this.cssClasses.itemShortcutKeyDisabled
+    );
+  }
+  public getItemAriaKeyShortcuts(item: ItemValue): string | undefined {
+    if (!this.canUseChoiceKeys || !this.getItemEnabled(item)) return undefined;
+    const code = this.getChoiceKeyBadge(item);
+    return code && code.length === 1 ? code : undefined;
+  }
+  public onChoiceKeyDown(event: any): void {
+    this.choiceShortcuts.onKeyDown(event);
+  }
+  public onChoiceFocusOut(event: any): void {
+    this.choiceShortcuts.onFocusOut(event);
+  }
+  protected applyChoiceKeyboardSelection(item: ItemValue): void {
+    this.selectItem(item);
+  }
+}
+
+function checkCopyPropVisibility(obj: any, mode: string): boolean {
+  if (!obj) return false;
+  if (!!obj.templateQuestion) {
+    const data = obj.colOwner?.data;
+    obj = obj.templateQuestion;
+    if (!obj.getCarryForwardQuestion(data)) return false;
+  }
+  return obj.carryForwardQuestionType === mode;
+}
+
+Serializer.addClass("choiceitem",
+  [{ name: "showCommentArea:boolean", locationInTable: "detail", visibleIf: (obj: any): boolean => { return obj.supportComment; } },
+    { name: "isCommentRequired:boolean", locationInTable: "detail", visibleIf: (obj: any): boolean => { return obj.showCommentArea; } },
+    { name: "commentPlaceholder", locationInTable: "detail", serializationProperty: "locCommentPlaceholder", visibleIf: (obj: any): boolean => { return obj.showCommentArea; } },
+    { name: "elements", baseClassName: "question", visible: false, isLightSerializable: false, isSerializableFunc: (obj) => obj.hasElements }
+  ],
+  (value) => new ChoiceItem(value),
+  "itemvalue"
+);
+
+Serializer.addClass(
+  "selectbase",
+  [
+    { name: "showCommentArea:switch", visible: true },
+    "choicesFromQuestion:question_carryforward",
+    {
+      name: "choices:choiceitem[]", uniqueProperty: "value",
+      baseValue: function () {
+        return getLocaleString("choices_Item");
+      },
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return !obj.choicesFromQuestion;
+      },
+    },
+    {
+      name: "choicesFromQuestionMode",
+      default: "all",
+      choices: ["all", "selected", "unselected"],
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return checkCopyPropVisibility(obj, "select");
+      },
+    },
+    {
+      name: "choiceValuesFromQuestion",
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return checkCopyPropVisibility(obj, "array");
+      },
+    },
+    {
+      name: "choiceTextsFromQuestion",
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return checkCopyPropVisibility(obj, "array");
+      },
+    },
+    {
+      name: "choicesOrder",
+      default: "none",
+      choices: ["none", "asc", "desc", "random"],
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return !obj.choicesFromQuestion;
+      },
+    },
+
+    {
+      name: "choicesByUrl:restfull",
+      className: "choicesByUrl",
+      onGetValue: (obj: any) => {
+        const byUrl = obj.choicesByUrlValue;
+        return byUrl ? byUrl.toJSON() : undefined;
+      },
+      onSetValue: (obj: any, value: any) => {
+        obj.choicesByUrl.setData(value);
+      },
+    },
+    "hideIfChoicesEmpty:boolean",
+    "choicesVisibleIf:condition",
+    {
+      name: "choicesEnableIf:condition",
+      dependsOn: "choicesFromQuestion",
+      visibleIf: (obj: any) => {
+        return !obj.choicesFromQuestion;
+      },
+    },
+    { name: "defaultValue:value", visibleIf: (obj: any): boolean => !obj.choicesFromQuestion, dependsOn: "choicesFromQuestion" },
+    { name: "correctAnswer:value", visibleIf: (obj: any): boolean => !obj.choicesFromQuestion, dependsOn: "choicesFromQuestion" },
+    { name: "separateSpecialChoices:boolean", visible: false },
+    { name: "showOtherItem:boolean", alternativeName: "hasOther" },
+    { name: "showNoneItem:boolean", alternativeName: "hasNone" },
+    { name: "showRefuseItem:boolean", visible: false, version: "1.9.128" },
+    { name: "showDontKnowItem:boolean", visible: false, version: "1.9.128" },
+    {
+      name: "otherPlaceholder",
+      alternativeName: "otherPlaceHolder",
+      serializationProperty: "locOtherPlaceholder",
+      dependsOn: "showOtherItem",
+      visibleIf: function (obj: any) {
+        return obj.showOtherItem;
+      },
+    },
+    {
+      name: "noneText",
+      serializationProperty: "locNoneText",
+      dependsOn: "showNoneItem",
+      visibleIf: function (obj: any) {
+        return obj.showNoneItem;
+      },
+    },
+    {
+      name: "refuseText",
+      serializationProperty: "locRefuseText",
+      dependsOn: "showRefuseItem",
+      visibleIf: function (obj: any) {
+        return obj.showRefuseItem;
+      },
+    },
+    {
+      name: "dontKnowText",
+      serializationProperty: "locDontKnowText",
+      dependsOn: "showDontKnowItem",
+      visibleIf: function (obj: any) {
+        return obj.showDontKnowItem;
+      },
+    },
+    {
+      name: "otherText",
+      serializationProperty: "locOtherText",
+      dependsOn: "showOtherItem",
+      visibleIf: function (obj: any) {
+        return obj.showOtherItem;
+      },
+    },
+    {
+      name: "otherErrorText",
+      serializationProperty: "locOtherErrorText",
+      dependsOn: "showOtherItem",
+      visibleIf: function (obj: any) {
+        return obj.showOtherItem;
+      },
+    },
+    {
+      name: "storeOthersAsComment",
+      default: "default",
+      choices: ["default", true, false],
+      visible: false,
+    }
+  ],
+  null,
+  "question"
+);
+
+Serializer.addClass(
+  "checkboxbase",
+  [
+    {
+      name: "colCount:number",
+      default: 1,
+      choices: [0, 1, 2, 3, 4, 5],
+      layout: "row",
+    },
+    {
+      name: "choiceShortcutsEnabled:boolean",
+      defaultFunc: () => undefined,
+      visibleIf: (obj: any): boolean => !!obj.supportsChoiceKeyboardSelection && obj.supportsChoiceKeyboardSelection()
+    }
+  ],
+  null,
+  "selectbase"
+);
